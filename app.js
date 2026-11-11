@@ -491,10 +491,10 @@
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
-      '<div id="extra"><div id="wxStats" class="stats"></div>' + photosHtml(t, saved) + '<div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) : '') + '</div>' +
+      '<div id="extra"><div id="wxStats" class="stats"></div><div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? photosHtml(t) + descHtml(t) : '') + '</div>' +
       '<div id="actions" class="actions">' +
       (saved
-        ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>' + (t.shared ? '' : '<button class="icon-btn sq" id="bPhoto" type="button" aria-label="Добавить фото">' + ic('camera', 22) + '</button>')
+        ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>'
         : '<button class="btn btn-primary" id="bSave" type="button">' + ic('bookmark', 20) + 'Сохранить точку</button><a class="icon-btn sq" href="' + routeUrl(t) + '" target="_blank" rel="noopener" aria-label="Маршрут">' + ic('nav', 22) + '</a>') +
       '</div>';
     $('#bCollapse').addEventListener('click', () => { applyState('mini'); setTimeout(focusTarget, 60); });
@@ -502,11 +502,6 @@
     $('#bClose').addEventListener('click', closeSheet);
     if (saved) {
       renderPhotoStrip();
-      const bp = $('#bPhoto');
-      if (bp) bp.addEventListener('click', () => {
-        if (!S.code) { toast('Сначала войдите в группу по ссылке из Telegram'); return; }
-        const f = $('#phFile'); if (f) f.click();
-      });
       $('#bMore').addEventListener('click', () => moreMenu(t));
       const ta = $('#descr');
       let tm;
@@ -802,7 +797,6 @@
     if (st === 'busy') return 'Синхронизация…';
     if (st === 'denied') return 'Код не подошёл';
     if (st === 'err') return 'Нет связи' + (S.sync.t ? ', последний раз ' + hhmm(S.sync.t) : '');
-    if (S.photoErr) return 'Фото пока не загрузились, повторю';
     return S.sync.t ? 'Обновлено ' + hhmm(S.sync.t) : 'Ожидание';
   }
   function setSync(state) {
@@ -852,7 +846,7 @@
       });
       S.spots = S.spots.filter((x) => x.shared || x.dirty || remote.has(x.id));
       saveLocal();
-      try { await syncPhotos(); S.photoErr = false; } catch (e) { S.photoErr = true; scheduleSync(30000); }
+      try { await syncPhotos(); S.photoErr = false; } catch (e) { S.photoErr = true; }
       const first = !S.sync.t;
       setSync('ok');
       refreshAfterSync();
@@ -1047,8 +1041,7 @@
   const photosOf = (id) => S.pending.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, pending: true, thumbUrl: x.thumbUrl, author: x.author, created: x.created }))
     .concat(S.photos.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, path: x.path, author: x.author, created: Date.parse(x.created_at) })))
     .sort((a, b) => b.created - a.created);
-  const photosHtml = (t, saved) => saved ? (t.shared ? '' : '<section class="ph-sec"><h3>Фото</h3><div id="phStrip" class="pstrip"></div></section>')
-    : '<section class="ph-sec"><h3>Фото</h3><p class="pnote">Сохраните точку, и здесь появится кнопка для добавления фото.</p></section>';
+  const photosHtml = (t) => t.shared ? '' : '<section class="ph-sec"><h3>Фото</h3><div id="phStrip" class="pstrip"></div></section>';
   function renderPhotoStrip() {
     const box = $('#phStrip'), t = S.sel && findSpot(S.sel);
     if (!box || !t) return;
@@ -1067,12 +1060,7 @@
   }
 
   // полноэкранный просмотр
-  function closeViewer(fromPop) {
-    const v = $('#viewer'); if (!v) return;
-    v.remove();
-    if (fromPop !== true && history.state && history.state.fmViewer) history.back();
-  }
-  window.addEventListener('popstate', () => { if ($('#viewer')) closeViewer(true); });
+  function closeViewer() { const v = $('#viewer'); if (v) v.remove(); }
   function openViewer(items, startId) {
     closeViewer();
     const v = document.createElement('div'); v.id = 'viewer'; v.className = 'viewer';
@@ -1080,7 +1068,6 @@
       '<div class="vscroll" id="vScroll">' + items.map((it) => '<div class="vslide"><img alt="Фото" ' + (it.pending ? 'src="' + it.thumbUrl + '"' : 'data-path="' + esc(it.path) + '"') + '></div>').join('') + '</div>' +
       '<div class="vbottom"><span id="vInfo"></span><button class="vbtn" id="vDel" type="button" aria-label="Удалить фото">' + ic('trash', 22, 'currentColor', 1.8) + '</button></div>';
     document.body.appendChild(v);
-    try { history.pushState({ fmViewer: 1 }, ''); } catch (e) { /* не критично */ }
     const sc = $('#vScroll'), slides = Array.from(sc.querySelectorAll('.vslide'));
     let cur = Math.max(0, items.findIndex((x) => x.id === startId));
     const loaded = new Set();
@@ -1103,7 +1090,7 @@
     sc.scrollLeft = cur * sc.clientWidth;
     show(cur);
     let tm; sc.addEventListener('scroll', () => { clearTimeout(tm); tm = setTimeout(() => { const i = clamp(rnd(sc.scrollLeft / sc.clientWidth), 0, items.length - 1); if (i !== cur) show(i); }, 60); });
-    $('#vClose').onclick = () => closeViewer();
+    $('#vClose').onclick = closeViewer;
     $('#vDel').onclick = () => deletePhoto(items[cur]);
   }
   function deletePhoto(it) {
@@ -1147,27 +1134,23 @@
       if (r.ok) { S.ptomb = S.ptomb.filter((x) => x !== path); savePhotos(); }
     }
     const items = await idbAll().catch(() => []);
-    let failed = 0;
     for (const it of items) {
       if (!findSpot(it.spot_id)) { await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id); continue; }
-      try {
-        const path = it.spot_id + '/' + it.id + '.jpg', hd = { 'Content-Type': 'image/jpeg', 'x-upsert': 'true' };
-        let r = await storage('POST', 'object/photos/' + thumbPath(path), { headers: hd, body: it.thumb });
-        if (!r.ok) throw new Error('thumb ' + r.status);
-        r = await storage('POST', 'object/photos/' + path, { headers: hd, body: it.full });
-        if (!r.ok) throw new Error('photo ' + r.status);
-        r = await sb('spot_photos?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: [{ id: it.id, spot_id: it.spot_id, path: path, author: it.author || '', created_at: new Date(it.created).toISOString() }] });
-        if (!r.ok && r.status !== 409) throw new Error('row ' + r.status);
-        cachePut(path, it.full); cachePut(thumbPath(path), it.thumb);
-        await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id);
-      } catch (e) { failed++; }
+      const path = it.spot_id + '/' + it.id + '.jpg', hd = { 'Content-Type': 'image/jpeg', 'x-upsert': 'true' };
+      let r = await storage('POST', 'object/photos/' + thumbPath(path), { headers: hd, body: it.thumb });
+      if (!r.ok) throw new Error('thumb ' + r.status);
+      r = await storage('POST', 'object/photos/' + path, { headers: hd, body: it.full });
+      if (!r.ok) throw new Error('photo ' + r.status);
+      r = await sb('spot_photos?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: [{ id: it.id, spot_id: it.spot_id, path: path, author: it.author || '', created_at: new Date(it.created).toISOString() }] });
+      if (!r.ok && r.status !== 409) throw new Error('row ' + r.status);
+      cachePut(path, it.full); cachePut(thumbPath(path), it.thumb);
+      await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id);
     }
     const r2 = await sb('spot_photos?select=*&order=created_at.asc');
     if (!r2.ok) throw new Error('photos ' + r2.status);
     const ids = new Set(S.spots.map((x) => x.id));
     S.photos = (await r2.json()).filter((x) => ids.has(x.spot_id)); savePhotos();
-    if (failed) throw new Error('upload failed: ' + failed);
   }
   idbAll().then((items) => {
     S.pending = items.map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author, created: x.created, thumbUrl: URL.createObjectURL(x.thumb) }));
