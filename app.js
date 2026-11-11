@@ -539,7 +539,7 @@
   function tgUrl(t) {
     const share = APP_URL + '#p=' + t.lat.toFixed(5) + ',' + t.lon.toFixed(5) + ',' + encodeURIComponent(t.name || 'Точка');
     const gm = 'https://www.google.com/maps/search/?api=1&query=' + t.lat + ',' + t.lon;
-    return 'https://t.me/share/url?url=' + encodeURIComponent(share) + '&text=' + encodeURIComponent('🎣 ' + (t.name || 'Точка') + '\n' + gm);
+    return 'https://t.me/share/url?url=' + encodeURIComponent(share) + '&text=' + encodeURIComponent('Выше: точка на нашей карте (погода, отзывы, фото)\nНазвание: ' + (t.name || 'Точка') + '\nGoogle Maps: ' + gm);
   }
 
   function openSpot(id, st) { S.sel = id; S.temp = null; setTempMarker(null); renderMarkers(); renderSheet(st || 'half'); }
