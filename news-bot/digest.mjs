@@ -211,7 +211,15 @@ async function resolveGoogleLink(link) {
 }
 
 function cleanSummary(raw, title) {
-  let s = entities(raw).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  let s = entities(entities(raw)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  // Издание само обрезало описание («… [...]»): оставляем только целые предложения.
+  const cutMark = /\s*\[?\s*(…|\.{3})\s*\]?\s*$/;
+  if (cutMark.test(s)) {
+    s = s.replace(cutMark, '');
+    const end = Math.max(s.lastIndexOf('. '), s.lastIndexOf('! '), s.lastIndexOf('? '));
+    if (end > 40) s = s.slice(0, end + 1);
+    else if (!/[.!?]$/.test(s)) return '';
+  }
   if (s.length < 50) return '';
   if (/cookie|subscribe|sign in|log in|javascript|enable|all rights reserved/i.test(s)) return '';
   // Описание, которое просто повторяет заголовок, ничего не добавляет.
