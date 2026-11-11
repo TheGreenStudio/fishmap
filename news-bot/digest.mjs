@@ -335,22 +335,53 @@ async function spotsBlock() {
 
 // ---------- отправка ----------
 
-async function sendTelegram(text) {
-  let r;
+async function tgCall(chatId, text) {
   try {
-    r = await fetch(`https://api.telegram.org/bot${E.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const r = await fetch(`https://api.telegram.org/bot${E.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: E.TELEGRAM_CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true,
-      }),
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
       signal: AbortSignal.timeout(20000),
     });
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok && j.ok === true, status: r.status, j };
   } catch {
-    throw new Error('не удалось связаться с Telegram');
+    return { ok: false, status: 0, j: {} };   // сеть; текст ошибки с адресом (в нём токен) не берём
   }
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.ok) throw new Error(`Telegram отказал: ${j.description || r.status}`);
+}
+
+// Что делать дальше после ответа Telegram. Вынесено отдельно, чтобы проверять тестами.
+export function nextTgStep(res, attempt) {
+  if (res.ok) return { action: 'done' };
+  const mig = res.j && res.j.parameters && res.j.parameters.migrate_to_chat_id;
+  if (mig) return { action: 'migrate', chatId: String(mig) };
+  if ((res.status === 0 || res.status === 429 || res.status >= 500) && attempt < 3) {
+    const wait = Math.min(((res.j && res.j.parameters && res.j.parameters.retry_after) || 2) * 1000, 20000);
+    return { action: 'retry', waitMs: wait };
+  }
+  return { action: 'fail' };
+}
+
+// Возвращает { migrated }: true, если группа стала супергруппой и сообщение ушло в новый чат.
+export async function sendTelegram(text) {
+  let chatId = E.TELEGRAM_CHAT_ID;
+  let migrated = false;
+  for (let attempt = 1; ; attempt++) {
+    const res = await tgCall(chatId, text);
+    const step = nextTgStep(res, attempt);
+    if (step.action === 'done') return { migrated };
+    if (step.action === 'migrate' && !migrated) {
+      migrated = true; chatId = step.chatId;
+      console.error('Группа стала супергруппой: отправляю в новый чат. Секрет TELEGRAM_CHAT_ID нужно обновить (новый ID покажет getUpdates).');
+      attempt--; continue;
+    }
+    if (step.action === 'retry') {
+      console.error(`Telegram не ответил (код ${res.status}), повтор ${attempt}/3`);
+      await new Promise((r) => setTimeout(r, step.waitMs));
+      continue;
+    }
+    throw new Error(`Telegram отказал: ${(res.j && res.j.description) || (res.status || 'нет связи')}`);
+  }
 }
 
 // ---------- главное ----------
@@ -370,6 +401,7 @@ async function main() {
 
   const blocks = [];
   const picked = [];
+  const problems = [];   // что пошло не так, но сводку всё же отправили: в конце помечаем запуск ошибкой, чтобы пришло письмо от GitHub
 
   try { blocks.push(await weatherBlock(today)); }
   catch (e) { console.error(`Погода недоступна: ${e.message}`); }
@@ -397,14 +429,19 @@ async function main() {
   if (!E.TELEGRAM_BOT_TOKEN || !E.TELEGRAM_CHAT_ID) {
     console.error('Не заданы TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID.'); process.exit(1);
   }
-  await sendTelegram(text);
+  const sent = await sendTelegram(text);
   console.log('Отправлено.');
+  if (sent.migrated) problems.push('группа стала супергруппой: обновите секрет TELEGRAM_CHAT_ID');
 
   if (SAVE) {
     state.lastSentDate = today;
     state.sent = [...picked, ...state.sent].slice(0, 100);
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
     if (E.GITHUB_OUTPUT) fs.appendFileSync(E.GITHUB_OUTPUT, 'saved=true\n');
+  }
+  if (problems.length) {
+    for (const p of problems) console.log(`::warning::${p}`);
+    process.exitCode = 1;
   }
 }
 

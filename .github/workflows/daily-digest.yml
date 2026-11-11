@@ -53,7 +53,7 @@ jobs:
           SAVE_STATE: ${{ (github.event_name == 'schedule' || inputs.save_state) && '1' || '0' }}
         run: node news-bot/digest.mjs
       - name: Save state
-        if: steps.digest.outputs.saved == 'true'
+        if: always() && steps.digest.outputs.saved == 'true'
         uses: actions/cache/save@v4
         with:
           path: news-bot/state.json
