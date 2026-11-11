@@ -7,9 +7,30 @@
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
   let lsWarnT = 0;
   const lsSet = (k, v) => {
-    try { localStorage.setItem(k, JSON.stringify(v)); return true; }
+    try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { /* место могла занять погода: чистим кэш и пробуем ещё раз */ }
+    try { pruneCache(10); localStorage.setItem(k, JSON.stringify(v)); return true; }
     catch (e) { if (Date.now() - lsWarnT > 8000 && typeof toast === 'function') { lsWarnT = Date.now(); setTimeout(() => toast('Память телефона заполнена: изменения могут не сохраниться. Очистите место', 5000), 1800); } return false; }
   };
+  // кэш погоды: каждое новое место на карте добавляет запись; старые и лишние удаляем, чтобы не забить память телефона
+  const WX_PRE = ['fishmap.wx.', 'fishmap.hist.'];
+  function pruneCache(keep) {
+    try {
+      const ents = [];
+      for (let k = 0; k < localStorage.length; k++) {
+        const key = localStorage.key(k);
+        if (!key || !WX_PRE.some((p) => key.startsWith(p))) continue;
+        let t = 0; try { t = (JSON.parse(localStorage.getItem(key)) || {}).t || 0; } catch (e) { /* испорчено: удалить */ }
+        ents.push({ key: key, t: t });
+      }
+      ents.sort((x, y) => y.t - x.t);
+      ents.forEach((e, i) => { if (i >= keep || Date.now() - e.t > 10 * 864e5) localStorage.removeItem(e.key); });
+    } catch (e) { /* хранилище недоступно */ }
+  }
+  function cacheSet(k, v) {
+    try { localStorage.setItem(k, JSON.stringify(v)); return; } catch (e) { pruneCache(15); }
+    try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* не страшно: это только кэш */ }
+  }
+  pruneCache(120);
   const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); });
   const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -166,6 +187,7 @@
   const mmHg = (h) => rnd(h * 0.75006);
   const dirName = (d) => ['северный', 'северо-восточный', 'восточный', 'юго-восточный', 'южный', 'юго-западный', 'западный', 'северо-западный'][rnd(d / 45) % 8];
   const hhmm = (t) => new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const whenText = (t) => new Date(t).toDateString() === new Date().toDateString() ? hhmm(t) : new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ', ' + hhmm(t);
   function fmtDist(m) { return m < 1000 ? rnd(m / 10) * 10 + ' м' : (m < 10000 ? (m / 1000).toFixed(1).replace('.', ',') : rnd(m / 1000)) + ' км'; }
   function distance(a, b) {
     const R = 6371000, r = Math.PI / 180;
@@ -348,7 +370,7 @@
       if (!r.ok) throw new Error('http ' + r.status);
       const j = await r.json();
       const data = { time: j.daily.time, tmax: j.daily.temperature_2m_max, tmin: j.daily.temperature_2m_min };
-      lsSet(key, { t: Date.now(), data });
+      cacheSet(key, { t: Date.now(), data });
       return data;
     } catch (e) { return cached && cached.data ? cached.data : null; }
   }
@@ -499,7 +521,7 @@
       clearTimeout(to);
       if (!r.ok) throw new Error('http ' + r.status);
       const data = await r.json();
-      lsSet(key, { t: Date.now(), data });
+      cacheSet(key, { t: Date.now(), data });
       return { data, t: Date.now(), stale: false };
     } catch (e) {
       if (cached) return { data: cached.data, t: cached.t, stale: true };
@@ -536,21 +558,27 @@
     const [icn, txt] = wmo(c.weather_code);
     const series = pressureSeries(d), tr = trend(series);
     const trIcon = tr.k === 'down' ? ic('arrow_down', 16, 'currentColor', 2.2) : tr.k === 'up' ? ic('arrow_up', 16, 'currentColor', 2.2) : '';
-    const precip = (dy.precipitation_sum[0] || 0);
+    // «сегодня» по часовому поясу самой точки; при старом кэше (без сети) прошедшие дни не показываем
+    const today = new Date(Date.now() + (d.utc_offset_seconds || 0) * 1000).toISOString().slice(0, 10);
+    let d0 = dy.time.indexOf(today);
+    if (d0 < 0) d0 = dy.time[0] > today ? 0 : dy.time.length;
+    const dIdx = dy.time.map((_, i) => i).filter((i) => i >= d0);
+    const dayName = (tm) => tm === today ? 'Сегодня' : new Date(tm + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' });
+    const precip = d0 < dy.time.length ? (dy.precipitation_sum[d0] || 0) : 0;
     const precipTxt = (precip > 0 ? precip.toFixed(1).replace('.', ',') : '0') + ' мм';
     const rot = 'transform:rotate(' + ((c.wind_direction_10m + 180) % 360) + 'deg)';
 
     $('#wxNow').innerHTML =
       '<div class="wxrow"><span class="wxicon">' + ic(icn, 44, 'currentColor', 1.6) + '</span><div class="temp">' + fmtT(c.temperature_2m) + '</div>' +
       '<div class="desc"><span>' + esc(txt) + '</span><span>Ощущается ' + fmtT(c.apparent_temperature) + '</span></div></div>' +
-      (res.stale ? '<div class="stale">' + ic('cloud_off', 18, 'currentColor', 2) + '<span>Нет сети, данные от ' + hhmm(res.t) + '</span></div>' : '');
+      (res.stale ? '<div class="stale">' + ic('cloud_off', 18, 'currentColor', 2) + '<span>Нет сети, данные от ' + whenText(res.t) + (Date.now() - res.t > 6 * 3600e3 ? ', могли устареть' : '') + '</span></div>' : '');
 
     $('#miniWx').innerHTML = ic(icn, 22, 'currentColor', 1.8) + fmtT(c.temperature_2m);
     const fctx = fishCtx(d, hist);
     const fnow = fishNow(d, series, fctx);
-    const fdays = dy.time.map((tm, i) => {
+    const fdays = dIdx.map((i) => {
       const fd = fishDay(d, i, fctx);
-      return { name: i === 0 ? 'Сегодня' : new Date(tm + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' }), score: fd.score, lvl: fd.lvl };
+      return { i: i, name: dayName(dy.time[i]), score: fd.score, lvl: fd.lvl };
     });
     S.fish = { now: fnow, ctx: fctx, days: fdays, sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null };
     let bestDay = -1;
@@ -569,15 +597,14 @@
       '<div class="stat"><span class="l">' + ic('arrow_up', 14, 'currentColor', 2.2, rot) + 'Ветер</span><span class="v">' + rnd(c.wind_speed_10m) + ' км/ч</span><span class="s">' + dirName(c.wind_direction_10m) + ', порывы ' + rnd(c.wind_gusts_10m) + '</span></div>' +
       '<div class="stat"><span class="l">' + ic('gauge', 14, 'currentColor', 2) + 'Давление</span><span class="v">' + mmHg(c.pressure_msl) + ' мм</span><span class="s">' + tr.text + '</span></div>' +
       '<div class="stat"><span class="l">' + ic('cloud', 14, 'currentColor', 2) + 'Облачность</span><span class="v">' + rnd(c.cloud_cover) + '%</span><span class="s">' + esc(txt.toLowerCase()) + '</span></div>' +
-      '<div class="stat"><span class="l">' + ic('drop', 14, 'currentColor', 2) + 'Осадки</span><span class="v">' + precipTxt + '</span><span class="s">сегодня</span></div>';
+      '<div class="stat"><span class="l">' + ic('drop', 14, 'currentColor', 2) + 'Осадки</span><span class="v">' + (d0 < dy.time.length ? precipTxt : '—') + '</span><span class="s">сегодня</span></div>';
 
-    $('#wxForecast').innerHTML = '<div class="forecast">' + dy.time.map((tm, i) => {
-      const dt = new Date(tm + 'T12:00:00');
-      const nm = i === 0 ? 'Сегодня' : dt.toLocaleDateString('ru-RU', { weekday: 'short' });
-      return '<div class="fday" data-l="' + fdays[i].lvl + '"><span class="d">' + esc(nm) + '</span>' + ic(wmo(dy.weather_code[i])[0], 26, 'currentColor', 1.6) +
+    $('#wxForecast').innerHTML = fdays.length ? '<div class="forecast">' + fdays.map((f, k) => {
+      const i = f.i;
+      return '<div class="fday" data-l="' + f.lvl + '"><span class="d">' + esc(f.name) + '</span>' + ic(wmo(dy.weather_code[i])[0], 26, 'currentColor', 1.6) +
         '<span class="hi">' + fmtT(dy.temperature_2m_max[i]) + '</span><span class="lo">' + fmtT(dy.temperature_2m_min[i]) + '</span>' +
-        '<span class="fs' + (i === bestDay ? ' best' : '') + '" title="Клёв ' + fdays[i].score + ' из 100" aria-label="Клёв ' + fdays[i].score + ' из 100">' + fdays[i].score + '</span></div>';
-    }).join('') + '</div>';
+        '<span class="fs' + (k === bestDay ? ' best' : '') + '" title="Клёв ' + f.score + ' из 100" aria-label="Клёв ' + f.score + ' из 100">' + f.score + '</span></div>';
+    }).join('') + '</div>' : '';
 
     const w = Math.min(window.innerWidth, 480) - 40 - 32;
     $('#wxSpark').innerHTML = series.length > 1
@@ -672,7 +699,7 @@
   }
 
   function descHtml(t) {
-    return '<section class="desc-sec"><h3>Описание</h3><textarea id="descr" aria-label="Описание точки" placeholder="Как подойти, глубина, на что клюёт…" rows="4"' + (t.shared ? ' readonly' : '') + '>' + esc(t.note || '') + '</textarea></section>';
+    return '<section class="desc-sec"><h3>Описание</h3><textarea id="descr" maxlength="4000" aria-label="Описание точки" placeholder="Как подойти, глубина, на что клюёт…" rows="4"' + (t.shared ? ' readonly' : '') + '>' + esc(t.note || '') + '</textarea></section>';
   }
   const subText = (t, saved) => (saved ? (t.author ? 'Автор: ' + esc(t.author) : 'Сохранено') + ' · ' + SEAS[seasonOf(t)] + (inSeason(t) ? '' : ' (не сезон)') + ' · ' : '') + coordsText(t);
   function renderSheet(startState) {
@@ -1024,6 +1051,8 @@
     if (st === 'busy') return 'Синхронизация…';
     if (st === 'denied') return 'Код не подошёл';
     if (st === 'err') return 'Нет связи' + (S.sync.t ? ', последний раз ' + hhmm(S.sync.t) : '');
+    const bad = S.spots.filter((x) => x.dirty && x.bad === x.updated).length;
+    if (bad) return 'Не отправлено точек: ' + bad + ' (база отклонила, измените точку)';
     if (S.photoErr) return 'Часть данных пока не отправилась, повторю';
     return S.sync.t ? 'Обновлено ' + hhmm(S.sync.t) : 'Ожидание';
   }
@@ -1047,18 +1076,29 @@
       if ((await r.json()) !== true) { setSync('denied'); return; }
       for (const id of S.tomb.slice()) {
         r = await sb('spots?id=eq.' + id, { method: 'DELETE' });
-        if (!r.ok) throw new Error('delete ' + r.status);
+        if (!r.ok && !(r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 403)) throw new Error('delete ' + r.status);
         S.tomb = S.tomb.filter((x) => x !== id); saveLocal();
       }
-      const dirty = S.spots.filter((x) => !x.shared && x.dirty);
+      // точки, которые база отклонила (4xx), не блокируют остальные; повтор после следующей правки точки
+      const dirty = S.spots.filter((x) => !x.shared && x.dirty && x.bad !== x.updated);
       if (dirty.length) {
         const snap = new Map(dirty.map((x) => [x.id, x.updated]));
-        r = await sb('spots?on_conflict=id', {
-          method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: dirty.map((x) => ({ id: x.id, name: x.name, lat: x.lat, lon: x.lon, note: x.note || '', season: seasonOf(x), author: x.author || '', author_id: x.owner === undefined ? S.dev : (x.owner || null), created_at: new Date(x.created || Date.now()).toISOString() }))
-        });
-        if (!r.ok) throw new Error('push ' + r.status);
-        dirty.forEach((x) => { if (x.owner === undefined) x.owner = S.dev; if (snap.get(x.id) === x.updated) delete x.dirty; });
+        const row = (x) => ({ id: x.id, name: String(x.name || 'Точка').slice(0, 80), lat: x.lat, lon: x.lon, note: String(x.note || '').slice(0, 4000), season: seasonOf(x), author: String(x.author || '').slice(0, 40), author_id: x.owner === undefined ? S.dev : (x.owner || null), created_at: new Date(x.created || Date.now()).toISOString() });
+        const push = (list) => sb('spots?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: list.map(row) });
+        const done = (x) => { if (x.owner === undefined) x.owner = S.dev; delete x.bad; if (snap.get(x.id) === x.updated) delete x.dirty; };
+        r = await push(dirty);
+        if (r.ok) dirty.forEach(done);
+        else if (r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 403) {
+          const rejected = [];
+          for (const x of dirty) {
+            const r1 = await push([x]);
+            if (r1.ok) done(x);
+            else if (r1.status >= 400 && r1.status < 500 && r1.status !== 401 && r1.status !== 403) { x.bad = x.updated; rejected.push(x.name); }
+            else throw new Error('push ' + r1.status);
+          }
+          saveLocal();
+          if (rejected.length) toast('Не удалось отправить в группу: ' + rejected.slice(0, 3).map((n) => '«' + n + '»').join(', ') + '. Измените точку и попробуйте снова', 6000);
+        } else throw new Error('push ' + r.status);
       }
       r = await sb('spots?select=*&order=created_at.asc');
       if (!r.ok) throw new Error('pull ' + r.status);
@@ -1449,16 +1489,22 @@
   async function syncComments() {
     for (const id of S.ctomb.slice()) {
       const r = await sb('spot_comments?id=eq.' + id, { method: 'DELETE' });
-      if (!r.ok) throw new Error('cdel ' + r.status);
+      if (!r.ok && !(r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 403)) throw new Error('cdel ' + r.status);
       S.ctomb = S.ctomb.filter((x) => x !== id); saveComments();
     }
     const ids = new Set(S.spots.map((x) => x.id));
-    const dirty = S.comments.filter((c) => c.dirty && ids.has(c.spot_id) && isUuid(c.spot_id));
+    const dirty = S.comments.filter((c) => c.dirty && !c.bad && ids.has(c.spot_id) && isUuid(c.spot_id));
     if (dirty.length) {
-      const r = await sb('spot_comments?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
-        body: dirty.map((c) => ({ id: c.id, spot_id: c.spot_id, author: c.author || '', author_id: c.owner || null, body: c.body, created_at: new Date(c.created).toISOString() })) });
-      if (!r.ok) throw new Error('cpush ' + r.status);
-      dirty.forEach((c) => { delete c.dirty; }); saveComments();
+      const push = (list) => sb('spot_comments?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+        body: list.map((c) => ({ id: c.id, spot_id: c.spot_id, author: String(c.author || '').slice(0, 40), author_id: c.owner || null, body: String(c.body || '').slice(0, 1000), created_at: new Date(c.created).toISOString() })) });
+      const perm = (st) => st >= 400 && st < 500 && st !== 401 && st !== 403;
+      const r = await push(dirty);
+      if (r.ok) dirty.forEach((c) => { delete c.dirty; });
+      else if (perm(r.status)) {
+        // один испорченный отзыв не должен навсегда блокировать остальные
+        for (const c of dirty) { const r1 = await push([c]); if (r1.ok) delete c.dirty; else if (perm(r1.status)) c.bad = true; else throw new Error('cpush ' + r1.status); }
+      } else throw new Error('cpush ' + r.status);
+      saveComments();
     }
     const r2 = await sb('spot_comments?select=*&order=created_at.asc');
     if (!r2.ok) throw new Error('cpull ' + r2.status);
@@ -1472,10 +1518,18 @@
   function parseCoords(q) {
     let s = String(q || '').trim().toLowerCase();
     if (!s) return null;
-    if (/https?:|maps/.test(s)) {
+    if (/https?:|maps|^geo:/.test(s)) {
+      try { s = decodeURIComponent(s); } catch (e) { /* оставить как есть */ }
+      // сначала точная метка места (!3d…!4d…), потом q=/ll=/query=, и только потом центр экрана (@…)
+      const pin = s.match(/!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/);
+      if (pin) return checkLL(+pin[1], +pin[2], false);
+      const q = s.match(/[?&](?:q|ll|query|destination|daddr)=(?:loc:)?(-?\d{1,3}\.\d+)\s*[,;+ ]\s*\+?(-?\d{1,3}\.\d+)/);
+      if (q) return checkLL(+q[1], +q[2], false);
       const g = s.match(/(-?\d{1,3}\.\d+)\s*[,;]\s*(-?\d{1,3}\.\d+)/);
       return g ? checkLL(+g[1], +g[2], true) : null;
     }
+    // «с.ш. / ю.ш. / в.д. / з.д.» → одна буква стороны света
+    s = s.replace(/([свюз])\.?\s*[шд]\.?/g, (m, h) => ' ' + h + ' ');
     s = s.replace(/[−–—]/g, '-').replace(/[′’‘`´]/g, "'").replace(/[″“”]/g, '"').replace(/[°'"]/g, ' ');
     if (!/\./.test(s)) s = s.replace(/(\d),(\d)/g, '$1.$2');
     else if (/;/.test(s)) s = s.replace(/(\d),(\d)/g, '$1.$2');
@@ -1543,7 +1597,9 @@
       rows.push('<div class="shead">' + (lq ? 'Ваши точки' : 'Недавние точки') + '</div>');
       mine.forEach((x) => rows.push(row('sm', 'fish', x.name, (x.author ? x.author + ' · ' : '') + coordsText(x) + (inSeason(x) ? '' : ' · ' + SEAS[seasonOf(x)]), 'data-act="spot" data-id="' + esc(x.id) + '"')));
     }
-    if (q.length >= 2 && !c) rows.push(row('sw', 'search', 'Искать «' + q + '» на карте', 'Озёра, реки, города, парки. Нужен интернет', 'data-act="web"'));
+    const isLink = /^(https?:\/\/|www\.|maps\.|goo\.gl|geo:)/i.test(q);
+    if (isLink && !c) rows.push('<div class="smsg warn">В этой ссылке нет координат (так бывает с короткими ссылками Google Maps). Откройте место в Google Maps, нажмите и подержите на точке и скопируйте координаты.</div>');
+    if (q.length >= 2 && !c && !isLink) rows.push(row('sw', 'search', 'Искать «' + q + '» на карте', 'Озёра, реки, города, парки. Нужен интернет', 'data-act="web"'));
     if (sBusy) rows.push('<div class="smsg">Ищу…</div>');
     if (sWeb) {
       rows.push('<div class="shead">Найдено на карте</div>');
@@ -1590,7 +1646,7 @@
   $('#sForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const c = parseCoords(sInput.value);
-    if (c) goTo(c.lat, c.lon, '', 14); else webSearch();
+    if (c) goTo(c.lat, c.lon, '', 14); else if (!/^(https?:\/\/|www\.|maps\.|goo\.gl|geo:)/i.test(sInput.value.trim())) webSearch();
   });
   sInput.addEventListener('input', () => { sSeq++; sBusy = false; sWeb = null; renderSearch(); });
   $('#sClose').addEventListener('click', closeSearch);
