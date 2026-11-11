@@ -17,6 +17,7 @@
     locate: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22"/>',
     layers: '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12.5l9 5 9-5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    camera: '<path d="M21 18a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h3l1.6-2.4h4.8L16 7h3a2 2 0 012 2z"/><circle cx="12" cy="13" r="3.8"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
     wind: '<path d="M3 9h10.5a2.5 2.5 0 10-2.5-2.5"/><path d="M3 15h14.5a2.5 2.5 0 11-2.5 2.5"/>',
@@ -490,7 +491,7 @@
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
-      '<div id="extra"><div id="wxStats" class="stats"></div><div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) : '') + '</div>' +
+      '<div id="extra"><div id="wxStats" class="stats"></div><div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? photosHtml(t) + descHtml(t) : '') + '</div>' +
       '<div id="actions" class="actions">' +
       (saved
         ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>'
@@ -500,6 +501,7 @@
     $('#bExpand').addEventListener('click', () => { applyState('peek'); setTimeout(focusTarget, 60); });
     $('#bClose').addEventListener('click', closeSheet);
     if (saved) {
+      renderPhotoStrip();
       $('#bMore').addEventListener('click', () => moreMenu(t));
       const ta = $('#descr');
       let tm;
@@ -625,7 +627,7 @@
       openModal('<h3>Удалить точку?</h3><p class="sub">«' + esc(t.name) + '» ' + (S.code ? 'исчезнет у всех в группе. Это нельзя отменить.' : 'исчезнет с этого устройства. Это нельзя отменить.') + '</p>' +
         '<div class="row"><button class="btn btn-secondary" id="dCancel" type="button">Отмена</button><button class="btn btn-danger" id="dOk" type="button">Удалить</button></div>');
       $('#dCancel').onclick = closeModal;
-      $('#dOk').onclick = () => { S.spots = S.spots.filter((s) => s.id !== t.id); if (isUuid(t.id) && !t.shared) S.tomb.push(t.id); saveLocal(); scheduleSync(); closeModal(); closeSheet(); toast('Точка удалена'); };
+      $('#dOk').onclick = () => { S.spots = S.spots.filter((s) => s.id !== t.id); if (isUuid(t.id) && !t.shared) { S.tomb.push(t.id); dropSpotPhotos(t.id); } saveLocal(); scheduleSync(); closeModal(); closeSheet(); toast('Точка удалена'); };
     };
   }
 
@@ -671,6 +673,7 @@
         '<span class="ct"><span class="n">' + esc(s.name) + '</span><span class="m">' + dist + ((s.author ? esc(s.author) + ' · ' : '') + (date ? (s.author ? '' : 'сохранена ') + esc(date) : 'общая точка')) + '</span>' +
         '<span class="w" data-w="' + esc(s.id) + '"></span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     }).join('');
+    hydrateListThumbs(box, arr);
     box.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
       const s = findSpot(c.dataset.id); closeList(); openSpot(s.id, 'half');
     }));
@@ -843,6 +846,7 @@
       });
       S.spots = S.spots.filter((x) => x.shared || x.dirty || remote.has(x.id));
       saveLocal();
+      try { await syncPhotos(); S.photoErr = false; } catch (e) { S.photoErr = true; }
       const first = !S.sync.t;
       setSync('ok');
       refreshAfterSync();
@@ -857,6 +861,7 @@
   }
   function refreshAfterSync() {
     renderMarkers();
+    renderPhotoStrip();
     if (lv.classList.contains('open')) renderListItems();
     if (S.sel) {
       const x = findSpot(S.sel);
@@ -921,6 +926,236 @@
   window.addEventListener('online', () => scheduleSync(300));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleSync(300); });
   setInterval(() => { if (!document.hidden) scheduleSync(0); }, 60000);
+
+  /* ---------- photos (Supabase Storage, закрытый бакет) ---------- */
+  const PH_CACHE = 'fishmap-photos-v1';
+  S.photos = lsGet('fishmap.v3.photos', []);
+  S.ptomb = lsGet('fishmap.v3.ptomb', []);
+  S.pending = [];
+  const savePhotos = () => { lsSet('fishmap.v3.photos', S.photos); lsSet('fishmap.v3.ptomb', S.ptomb); };
+  const thumbPath = (p) => p.replace(/\.jpg$/, '_t.jpg');
+
+  // очередь фото, снятых без сети: IndexedDB
+  const idbOpen = () => new Promise((res, rej) => {
+    const r = indexedDB.open('fishmap', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('pending', { keyPath: 'id' });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  async function idb(mode, fn) {
+    const db = await idbOpen();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('pending', mode), rq = fn(tx.objectStore('pending'));
+      tx.oncomplete = () => { db.close(); res(rq && rq.result); };
+      tx.onerror = tx.onabort = () => { db.close(); rej(tx.error); };
+    });
+  }
+  const idbPut = (v) => idb('readwrite', (st) => st.put(v));
+  const idbAll = () => idb('readonly', (st) => st.getAll());
+  const idbDel = (k) => idb('readwrite', (st) => st.delete(k));
+
+  async function storage(method, path, opt) {
+    opt = opt || {};
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 45000);
+    try {
+      return await fetch(SB.url + '/storage/v1/' + path, { method: method, signal: ctl.signal,
+        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code }, opt.headers || {}), body: opt.body });
+    } finally { clearTimeout(to); }
+  }
+
+  // сжатие: до 1600 px по длинной стороне, JPEG; перерисовка в canvas убирает EXIF (геометки)
+  async function loadBitmap(file) {
+    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { /* запасной путь */ }
+    return new Promise((res, rej) => {
+      const u = URL.createObjectURL(file), im = new Image();
+      im.onload = () => { URL.revokeObjectURL(u); res(im); };
+      im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('decode')); };
+      im.src = u;
+    });
+  }
+  function resizeTo(src, side, q) {
+    const w0 = src.width || src.naturalWidth, h0 = src.height || src.naturalHeight, k = Math.min(1, side / Math.max(w0, h0));
+    const c = document.createElement('canvas'); c.width = Math.max(1, rnd(w0 * k)); c.height = Math.max(1, rnd(h0 * k));
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(src, 0, 0, c.width, c.height);
+    return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('blob'))), 'image/jpeg', q));
+  }
+  async function addPhotos(spotId, files) {
+    const list = Array.from(files || []).slice(0, 10);
+    let ok = 0;
+    for (const f of list) {
+      try {
+        const bmp = await loadBitmap(f);
+        const full = await resizeTo(bmp, 1600, 0.8), thumb = await resizeTo(bmp, 400, 0.72);
+        if (bmp.close) bmp.close();
+        const rec = { id: uid(), spot_id: spotId, author: S.me || '', created: Date.now(), full: full, thumb: thumb };
+        await idbPut(rec);
+        S.pending.push({ id: rec.id, spot_id: spotId, author: rec.author, created: rec.created, thumbUrl: URL.createObjectURL(thumb) });
+        ok++; renderPhotoStrip();
+      } catch (e) { toast('Не удалось обработать фото'); }
+    }
+    if (ok) { toast(navigator.onLine ? 'Загружаю фото…' : 'Фото сохранено, загрузится при появлении сети'); scheduleSync(0); }
+  }
+
+  // показ: подписанные ссылки (закрытый бакет) + кэш на устройстве, чтобы смотреть без сети
+  const phMem = new Map(), signedUrls = new Map();
+  async function phCache() { return 'caches' in window ? caches.open(PH_CACHE) : null; }
+  async function cachePut(path, blob) {
+    try { const c = await phCache(); if (c) await c.put('/_photo/' + path, new Response(blob, { headers: { 'Content-Type': 'image/jpeg' } })); } catch (e) { /* не критично */ }
+  }
+  async function fromCache(path) {
+    if (phMem.has(path)) return phMem.get(path);
+    try {
+      const c = await phCache(), hit = c && await c.match('/_photo/' + path);
+      if (hit) { const u = URL.createObjectURL(await hit.blob()); phMem.set(path, u); return u; }
+    } catch (e) { /* нет кэша */ }
+    return '';
+  }
+  async function signPaths(paths) {
+    const need = paths.filter((p) => !(signedUrls.get(p) && signedUrls.get(p).exp > Date.now()));
+    if (!need.length) return;
+    const r = await storage('POST', 'object/sign/photos', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: 3600, paths: need }) });
+    if (!r.ok) throw new Error('sign ' + r.status);
+    (await r.json()).forEach((x) => { if (x.signedURL && x.path) signedUrls.set(x.path, { url: SB.url + '/storage/v1' + x.signedURL, exp: Date.now() + 50 * 60000 }); });
+  }
+  async function fetchPhoto(path) {
+    try {
+      if (!signedUrls.get(path)) await signPaths([path]);
+      const r = await fetch(signedUrls.get(path).url);
+      if (!r.ok) return '';
+      const b = await r.blob(); cachePut(path, b);
+      const u = URL.createObjectURL(b); phMem.set(path, u); return u;
+    } catch (e) { return ''; }
+  }
+  async function loadThumbs(imgs) {
+    const missing = [];
+    for (const im of imgs) {
+      const p = thumbPath(im.dataset.path), u = await fromCache(p);
+      if (u) im.src = u; else missing.push([im, p]);
+    }
+    if (!missing.length || !navigator.onLine || !S.code) return;
+    try { await signPaths(missing.map((m) => m[1])); } catch (e) { return; }
+    for (let i = 0; i < missing.length; i += 4) {
+      await Promise.all(missing.slice(i, i + 4).map(async ([im, p]) => { const u = await fetchPhoto(p); if (u && im.isConnected) im.src = u; }));
+    }
+  }
+
+  const photosOf = (id) => S.pending.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, pending: true, thumbUrl: x.thumbUrl, author: x.author, created: x.created }))
+    .concat(S.photos.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, path: x.path, author: x.author, created: Date.parse(x.created_at) })))
+    .sort((a, b) => b.created - a.created);
+  const photosHtml = (t) => t.shared ? '' : '<section class="ph-sec"><h3>Фото</h3><div id="phStrip" class="pstrip"></div></section>';
+  function renderPhotoStrip() {
+    const box = $('#phStrip'), t = S.sel && findSpot(S.sel);
+    if (!box || !t) return;
+    const items = photosOf(t.id);
+    box.innerHTML = (S.code
+      ? '<button class="ptile padd" id="phAdd" type="button">' + ic('camera', 26, 'currentColor', 1.6) + '<span>Добавить</span></button><input id="phFile" type="file" accept="image/*" multiple hidden>'
+      : '<p class="pnote">Войдите в группу (меню со слоями, раздел «Группа»), чтобы добавлять фото.</p>') +
+      items.map((it) => '<button class="ptile" type="button" data-pid="' + esc(it.id) + '" aria-label="Открыть фото">' +
+        (it.pending ? '<img alt="" src="' + it.thumbUrl + '"><span class="pbadge">' + (navigator.onLine ? 'Загрузка' : 'Ждёт сеть') + '</span>' : '<img alt="" data-path="' + esc(it.path) + '">') + '</button>').join('');
+    if (S.code) {
+      $('#phAdd').onclick = () => $('#phFile').click();
+      $('#phFile').onchange = (e) => { addPhotos(t.id, e.target.files); e.target.value = ''; };
+    }
+    box.querySelectorAll('.ptile[data-pid]').forEach((b) => { b.onclick = () => openViewer(items, b.dataset.pid); });
+    loadThumbs(Array.from(box.querySelectorAll('img[data-path]')));
+  }
+
+  // полноэкранный просмотр
+  function closeViewer() { const v = $('#viewer'); if (v) v.remove(); }
+  function openViewer(items, startId) {
+    closeViewer();
+    const v = document.createElement('div'); v.id = 'viewer'; v.className = 'viewer';
+    v.innerHTML = '<div class="vtop"><button class="vbtn" id="vClose" type="button" aria-label="Закрыть">' + ic('x', 22, 'currentColor', 2) + '</button><span id="vCount"></span></div>' +
+      '<div class="vscroll" id="vScroll">' + items.map((it) => '<div class="vslide"><img alt="Фото" ' + (it.pending ? 'src="' + it.thumbUrl + '"' : 'data-path="' + esc(it.path) + '"') + '></div>').join('') + '</div>' +
+      '<div class="vbottom"><span id="vInfo"></span><button class="vbtn" id="vDel" type="button" aria-label="Удалить фото">' + ic('trash', 22, 'currentColor', 1.8) + '</button></div>';
+    document.body.appendChild(v);
+    const sc = $('#vScroll'), slides = Array.from(sc.querySelectorAll('.vslide'));
+    let cur = Math.max(0, items.findIndex((x) => x.id === startId));
+    const loaded = new Set();
+    async function loadFull(i) {
+      if (i < 0 || i >= items.length || loaded.has(i) || items[i].pending) return;
+      loaded.add(i);
+      const im = slides[i].querySelector('img'), p = items[i].path;
+      const t = await fromCache(thumbPath(p)); if (t) im.src = t;
+      let u = await fromCache(p);
+      if (!u && navigator.onLine) u = await fetchPhoto(p);
+      if (u && im.isConnected) im.src = u; else if (!t && im.isConnected) loadThumbs([im]);
+    }
+    function show(i) {
+      cur = i;
+      $('#vCount').textContent = (i + 1) + ' / ' + items.length;
+      const it = items[i];
+      $('#vInfo').textContent = [it.author, new Date(it.created).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }), it.pending ? 'ещё не загружено' : ''].filter(Boolean).join(' · ');
+      loadFull(i); loadFull(i - 1); loadFull(i + 1);
+    }
+    sc.scrollLeft = cur * sc.clientWidth;
+    show(cur);
+    let tm; sc.addEventListener('scroll', () => { clearTimeout(tm); tm = setTimeout(() => { const i = clamp(rnd(sc.scrollLeft / sc.clientWidth), 0, items.length - 1); if (i !== cur) show(i); }, 60); });
+    $('#vClose').onclick = closeViewer;
+    $('#vDel').onclick = () => deletePhoto(items[cur]);
+  }
+  function deletePhoto(it) {
+    openModal('<h3>Удалить фото?</h3><p class="sub">Оно исчезнет у всех в группе. Это нельзя отменить.</p>' +
+      '<div class="row"><button class="btn btn-secondary" id="pdCancel" type="button">Отмена</button><button class="btn btn-danger" id="pdOk" type="button">Удалить</button></div>');
+    $('#pdCancel').onclick = closeModal;
+    $('#pdOk').onclick = async () => {
+      if (it.pending) {
+        await idbDel(it.id).catch(() => {}); S.pending = S.pending.filter((x) => x.id !== it.id);
+      } else {
+        if (!navigator.onLine) { closeModal(); toast('Нужен интернет, чтобы удалить фото'); return; }
+        try {
+          const r = await sb('spot_photos?id=eq.' + it.id, { method: 'DELETE' });
+          if (!r.ok) throw new Error('del ' + r.status);
+          S.photos = S.photos.filter((x) => x.id !== it.id); savePhotos();
+          storage('DELETE', 'object/photos', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [it.path, thumbPath(it.path)] }) }).catch(() => { S.ptomb.push(it.path); savePhotos(); });
+        } catch (e) { closeModal(); toast('Не удалось удалить, попробуйте позже'); return; }
+      }
+      closeModal(); closeViewer(); renderPhotoStrip(); toast('Фото удалено');
+    };
+  }
+  function dropSpotPhotos(spotId) {
+    S.photos.filter((x) => x.spot_id === spotId).forEach((x) => S.ptomb.push(x.path));
+    S.photos = S.photos.filter((x) => x.spot_id !== spotId);
+    S.pending.filter((x) => x.spot_id === spotId).forEach((x) => idbDel(x.id).catch(() => {}));
+    S.pending = S.pending.filter((x) => x.spot_id !== spotId);
+    savePhotos();
+  }
+  function hydrateListThumbs(box, arr) {
+    arr.forEach((sp) => {
+      const first = photosOf(sp.id)[0]; if (!first) return;
+      const th = box.querySelector('.card[data-id="' + sp.id + '"] .thumb'); if (!th) return;
+      const im = document.createElement('img'); im.alt = '';
+      if (first.pending) im.src = first.thumbUrl; else { im.dataset.path = first.path; loadThumbs([im]); }
+      th.innerHTML = ''; th.appendChild(im);
+    });
+  }
+  async function syncPhotos() {
+    for (const path of S.ptomb.slice()) {
+      const r = await storage('DELETE', 'object/photos', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [path, thumbPath(path)] }) });
+      if (r.ok) { S.ptomb = S.ptomb.filter((x) => x !== path); savePhotos(); }
+    }
+    const items = await idbAll().catch(() => []);
+    for (const it of items) {
+      if (!findSpot(it.spot_id)) { await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id); continue; }
+      const path = it.spot_id + '/' + it.id + '.jpg', hd = { 'Content-Type': 'image/jpeg', 'x-upsert': 'true' };
+      let r = await storage('POST', 'object/photos/' + thumbPath(path), { headers: hd, body: it.thumb });
+      if (!r.ok) throw new Error('thumb ' + r.status);
+      r = await storage('POST', 'object/photos/' + path, { headers: hd, body: it.full });
+      if (!r.ok) throw new Error('photo ' + r.status);
+      r = await sb('spot_photos?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: [{ id: it.id, spot_id: it.spot_id, path: path, author: it.author || '', created_at: new Date(it.created).toISOString() }] });
+      if (!r.ok && r.status !== 409) throw new Error('row ' + r.status);
+      cachePut(path, it.full); cachePut(thumbPath(path), it.thumb);
+      await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id);
+    }
+    const r2 = await sb('spot_photos?select=*&order=created_at.asc');
+    if (!r2.ok) throw new Error('photos ' + r2.status);
+    const ids = new Set(S.spots.map((x) => x.id));
+    S.photos = (await r2.json()).filter((x) => ids.has(x.spot_id)); savePhotos();
+  }
+  idbAll().then((items) => {
+    S.pending = items.map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author, created: x.created, thumbUrl: URL.createObjectURL(x.thumb) }));
+    renderPhotoStrip();
+  }).catch(() => {});
 
   /* ---------- deep link: #p=lat,lon,name ---------- */
   function checkHash() {
