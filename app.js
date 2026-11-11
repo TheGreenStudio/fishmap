@@ -5,7 +5,11 @@
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
-  const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  let lsWarnT = 0;
+  const lsSet = (k, v) => {
+    try { localStorage.setItem(k, JSON.stringify(v)); return true; }
+    catch (e) { if (Date.now() - lsWarnT > 8000 && typeof toast === 'function') { lsWarnT = Date.now(); setTimeout(() => toast('Память телефона заполнена: изменения могут не сохраниться. Очистите место', 5000), 1800); } return false; }
+  };
   const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); });
   const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -616,9 +620,12 @@
       '<div class="row"><button class="btn btn-secondary" id="fCancel" type="button">Отмена</button><button class="btn btn-primary" id="fSave" type="button">Сохранить</button></div>');
     const inp = $('#fName'); inp.focus(); inp.select();
     $('#fCancel').onclick = closeModal;
+    let done = false;
     const go = () => {
+      if (done) return;
       const name = inp.value.trim();
       if (!name) { inp.focus(); return; }
+      done = true;
       const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', author: S.me || '', owner: S.dev, created: Date.now(), updated: Date.now(), dirty: true };
       S.spots.push(s); saveLocal(); scheduleSync(); closeModal();
       S.temp = null; setTempMarker(null);
