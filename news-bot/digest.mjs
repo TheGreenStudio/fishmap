@@ -24,16 +24,23 @@ const STATE_FILE = E.STATE_FILE || 'news-bot/state.json';
 const FIXTURES = E.FIXTURE_DIR || '';
 
 // Порядок разделов в сообщении: сначала то, что ближе к читателю.
+// Запросы намеренно простые: Google News на длинные запросы с OR отвечает мусором
+// (проверено вживую 2026-11-11). Результаты нескольких запросов объединяются.
 const SECTIONS = [
-  { title: 'Альберта', fixture: 'alberta.xml', days: 14,
-    query: '(fishing OR angling OR anglers OR "ice fishing" OR "fish stocking") Alberta' },
-  { title: 'Канада', fixture: 'canada.xml', days: 7,
-    query: '(fishing OR angling OR anglers OR "ice fishing") Canada' },
+  { title: 'Альберта', fixture: 'alberta.xml', days: 21,
+    queries: ['Alberta fishing', 'Alberta anglers', 'Calgary fishing', 'Alberta ice fishing'],
+    // Новость должна быть про Альберту (в заголовке или названии источника).
+    region: /alberta|calgary|edmonton|red deer|lethbridge|medicine hat|bow river|stettler|grande prairie|peace river|banff|jasper|canmore|cochrane|airdrie|okotoks|mcmurray|slave lake|athabasca|cold lake|bonnyville|wetaskiwin|camrose|drumheller|lloydminster|brooks|high river|rocky mountain house|sylvan|pigeon lake|lac la biche/i },
+  { title: 'Канада', fixture: 'canada.xml', days: 14,
+    queries: ['Canada fishing anglers', 'recreational fishing Canada', 'ice fishing Canada', 'Fisheries and Oceans Canada anglers'],
+    // Только канадские новости: американские местные газеты с запросом «Canada» тоже находятся.
+    region: /canad|b\.c\.|\bbc\b|ontario|manitoba|saskatchewan|quebec|nova scotia|new brunswick|newfoundland|yukon|nunavut|northwest territories|\bdfo\b|fisheries and oceans|cbc|ctv|global news|citynews|narcity|daily hive|castanet|national post|toronto|vancouver|winnipeg|ottawa|kelowna|kamloops|victoria|\.ca\b/i },
 ];
 
 // Нужны именно новости про любительскую рыбалку: промысел и прочее отсекаем.
-const MUST = /fish|angl/i;
-const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|scallop|oyster|whale|trawler|vessel|obituar|\bdie[sd]?\b|dead|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|shares|\bcod\b|quota|fish farm|salmon farm|herring|tuna/i;
+// Слова «fish/angl» нет в части заголовков (например «Prussian carp», «Big Jack Classic»), поэтому список шире.
+const MUST = /fish|angl|trout|walleye|pike|carp|sturgeon|whitefish|perch|grayling|burbot|bass\b|salmon|steelhead|big jack|derby|stocking|lake trout|tackle/i;
+const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b|dead|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|shares|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|first nation|pipeline|hydro|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
 
 // ---------- вспомогательное ----------
 
@@ -98,16 +105,26 @@ function parseRss(xml) {
 }
 
 async function pickNews(section, state, used) {
-  const url = 'https://news.google.com/rss/search?q='
-    + encodeURIComponent(`${section.query} when:${section.days}d`)
-    + '&hl=en-CA&gl=CA&ceid=CA:en';
-  const items = parseRss(await getText(url, section.fixture));
+  const all = new Map();
+  let failed = 0;
+  for (const q of section.queries) {
+    const url = 'https://news.google.com/rss/search?q='
+      + encodeURIComponent(`${q} when:${section.days}d`)
+      + '&hl=en-CA&gl=CA&ceid=CA:en';
+    try {
+      for (const it of parseRss(await getText(url, section.fixture))) all.set(it.link, it);
+    } catch (e) { failed++; console.error(`${section.title}: запрос «${q}» не удался (${e.message})`); }
+  }
+  if (failed === section.queries.length) throw new Error('все запросы не удались');
   const cutoff = Date.now() - section.days * 864e5;
-  return items
+  const found = [...all.values()]
     .filter((i) => i.date.getTime() >= cutoff
       && MUST.test(i.title) && !BLOCK.test(i.title)
+      && section.region.test(`${i.title} ${i.source}`)
       && !state.sent.includes(norm(i.title)) && !used.has(norm(i.title)))
-    .sort((a, b) => b.date - a.date)[0] || null;
+    .sort((a, b) => b.date - a.date);
+  console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
+  return found[0] || null;
 }
 
 function newsBlock(section, item) {
@@ -154,7 +171,8 @@ async function weatherBlock(today) {
     const cold = future.find((x) => x.min <= -5);
     const lowest = Math.min(...future.map((x) => x.min));
     if (cold) parts.push(`Похолодание: с ${ruDay(cold.date)} ночью до ${fmtT(Math.min(...future.filter((x) => x.date >= cold.date).map((x) => x.min)))}. Льда пока ждать не стоит.`);
-    else if (lowest <= 0) parts.push(`Ночные заморозки слабые (до ${fmtT(lowest)}), льда нет.`);
+    else if (Math.round(lowest) <= -1) parts.push(`Ночные заморозки слабые (до ${fmtT(lowest)}), льда нет.`);
+    else if (lowest <= 0.5) parts.push('Ночью около нуля, льда нет.');
     else parts.push('Заморозков на неделю не видно, льда нет.');
   }
   return `<b>Погода.</b> ${parts.join(' ')}`;
