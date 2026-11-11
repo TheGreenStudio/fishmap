@@ -1,5 +1,5 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v25';
+const SHELL = 'fishmap-shell-v26';
 const TILES = 'fishmap-tiles-v1';
 const PHOTOS = 'fishmap-photos-v1'; // фото из группы, их нельзя удалять при обновлении
 const MAX_TILES = 3000;
@@ -27,20 +27,32 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// Чистка кэша плиток не чаще раза в 20 с (раньше список из 3000 плиток перебирался на каждую новую плитку)
+let lastTrim = 0, trimming = false;
 async function trimTiles(cache) {
-  const keys = await cache.keys();
-  if (keys.length > MAX_TILES) {
-    await Promise.all(keys.slice(0, keys.length - MAX_TILES + 200).map((k) => cache.delete(k)));
-  }
+  if (trimming || Date.now() - lastTrim < 20000) return;
+  trimming = true; lastTrim = Date.now();
+  try {
+    const keys = await cache.keys();
+    if (keys.length > MAX_TILES) await Promise.all(keys.slice(0, keys.length - MAX_TILES + 200).map((k) => cache.delete(k)));
+  } finally { trimming = false; }
+}
+
+// Плитки, которые смотрят снова (свои места), переносим в конец очереди (put заменяет запись и ставит её в конец), чтобы при чистке удалялись давно не нужные, а не самые первые
+const touched = new Set();
+async function touchTile(cache, url, res) {
+  if (touched.has(url) || touched.size > 5000) return;
+  touched.add(url);
+  try { const b = await res.blob(); await cache.put(url, new Response(b, { status: 200, headers: res.headers })); } catch (e) { /* не критично */ }
 }
 
 async function tileHandler(request) {
   const cache = await caches.open(TILES);
   const hit = await cache.match(request.url);
-  if (hit) return hit;
+  if (hit) { touchTile(cache, request.url, hit.clone()); return hit; }
   try {
     const res = await fetch(new Request(request.url, { mode: 'cors' }));
-    if (res.ok) { cache.put(request.url, res.clone()); trimTiles(cache); }
+    if (res.ok) { cache.put(request.url, res.clone()).then(() => trimTiles(cache)).catch(() => {}); }
     return res;
   } catch (err) {
     return new Response('', { status: 504 });

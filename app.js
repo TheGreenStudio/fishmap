@@ -744,7 +744,10 @@
       $('#bMore').addEventListener('click', () => moreMenu(t));
       const ta = $('#descr');
       let tm;
-      ta.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { const s = findSpot(t.id); if (s && !s.shared) { s.note = ta.value; touch(s); } }, 400); });
+      const flush = () => { clearTimeout(tm); const s = findSpot(t.id); if (s && !s.shared && s.note !== ta.value) { s.note = ta.value; touch(s); } };
+      ta.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(flush, 400); });
+      ta.addEventListener('blur', flush);
+      flushDescr = flush;
     } else {
       $('#bSave').addEventListener('click', () => saveDialog({ lat: t.lat, lon: t.lon }, t.label));
     }
@@ -754,6 +757,10 @@
     focusTarget();
     loadWeather(t);
   }
+  let flushDescr = null;
+  // описание сохраняется с задержкой 0,4 с: если приложение свернули сразу после ввода, сохраняем немедленно
+  window.addEventListener('pagehide', () => { if (flushDescr) flushDescr(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && flushDescr) flushDescr(); });
   const routeUrl = (t) => 'https://www.google.com/maps/dir/?api=1&destination=' + t.lat + ',' + t.lon;
   function tgUrl(t) {
     const share = APP_URL + '#p=' + t.lat.toFixed(5) + ',' + t.lon.toFixed(5) + ',' + encodeURIComponent(t.name || 'Точка');
@@ -1137,7 +1144,7 @@
     if (lv.classList.contains('open')) renderListItems();
     if (S.sel) {
       const x = findSpot(S.sel);
-      if (!x) { closeSheet(); return; }
+      if (!x) { closeSheet(); toast('Эту точку удалил её автор'); return; }
       const ti = body.querySelector('.title'), su = body.querySelector('.sub');
       if (ti) ti.textContent = x.name;
       const mt = body.querySelector('.mini-title'); if (mt) mt.textContent = x.name;
@@ -1164,8 +1171,9 @@
   }
   function leaveGroup() {
     S.code = ''; lsSet('fishmap.code', ''); S.sync = { state: 'off', t: 0 }; lsSet('fishmap.syncT', 0);
-    S.spots.forEach((x) => { if (!x.shared) x.dirty = true; });
-    saveLocal(); renderGroup();
+    // свои точки снова отправятся при входе в группу; чужие не помечаем, иначе удалённые их авторами точки вернутся
+    S.spots.forEach((x) => { if (!x.shared && (x.owner === S.dev || x.owner === undefined)) x.dirty = true; });
+    saveLocal(); renderGroup(); toast('Вы отключились от группы. Точки остались на телефоне');
   }
   function renderGroup() {
     const box = $('#grp'); if (!box) return;
@@ -1175,7 +1183,13 @@
         '<button class="linkbtn" id="gOut" type="button">Отключиться от группы</button>';
       $('#gSync').onclick = () => { if (!navigator.onLine) { toast('Нет интернета'); return; } syncNow(); };
       $('#gName').onclick = () => { closeMenu(); askName(); };
-      $('#gOut').onclick = leaveGroup;
+      $('#gOut').onclick = (e) => {
+        // защита от случайного нажатия: второе нажатие в течение 4 секунд
+        const b = e.currentTarget;
+        if (b.dataset.armed) { leaveGroup(); return; }
+        b.dataset.armed = '1'; b.textContent = 'Нажмите ещё раз, чтобы отключиться';
+        setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = 'Отключиться от группы'; } }, 4000);
+      };
     } else {
       box.innerHTML = '<p class="note" style="margin:0 0 8px">Вставьте ссылку или код группы из Telegram, чтобы видеть общие точки.</p>' +
         '<div class="grow"><input id="gCode" class="input sm" placeholder="Ссылка или код" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn btn-primary sm" id="gJoin" type="button">Войти</button></div>';
@@ -1270,6 +1284,19 @@
   // показ: подписанные ссылки (закрытый бакет) + кэш на устройстве, чтобы смотреть без сети
   const phMem = new Map(), signedUrls = new Map();
   async function phCache() { return 'caches' in window ? caches.open(PH_CACHE) : null; }
+  // кэш фото на телефоне тоже ограничиваем: удаляем фото, которых уже нет в группе, и самые старые сверх 400 файлов
+  async function prunePhotoCache() {
+    try {
+      const c = await phCache(); if (!c) return;
+      const keys = await c.keys(), live = new Set();
+      S.photos.forEach((ph) => { live.add(ph.path); live.add(thumbPath(ph.path)); });
+      const dead = keys.filter((k) => { const p = decodeURIComponent(new URL(k.url).pathname.replace(/^.*\/_photo\//, '')); return S.code && S.photos.length && !live.has(p); });
+      const rest = keys.filter((k) => !dead.includes(k));
+      const over = rest.length > 400 ? rest.slice(0, rest.length - 400) : [];
+      await Promise.all(dead.concat(over).map((k) => c.delete(k)));
+    } catch (e) { /* не критично */ }
+  }
+  setTimeout(prunePhotoCache, 20000);
   async function cachePut(path, blob) {
     try { const c = await phCache(); if (c) await c.put('/_photo/' + path, new Response(blob, { headers: { 'Content-Type': 'image/jpeg' } })); } catch (e) { /* не критично */ }
   }
@@ -1290,7 +1317,9 @@
   }
   async function fetchPhoto(path) {
     try {
-      if (!signedUrls.get(path)) await signPaths([path]);
+      // подписанная ссылка живёт час: при долгой работе приложения её нужно обновить, иначе фото не откроется
+      const sg = signedUrls.get(path);
+      if (!sg || sg.exp <= Date.now()) await signPaths([path]);
       const r = await fetch(signedUrls.get(path).url);
       if (!r.ok) return '';
       const b = await r.blob(); cachePut(path, b);
@@ -1455,7 +1484,7 @@
     box.innerHTML = items.length ? items.map((c) =>
       '<div class="cm"><div class="cmh"><b>' + esc(c.author || 'Без имени') + '</b><span>' +
       esc(new Date(c.created).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + '</span>' +
-      (c.dirty ? '<em>' + (navigator.onLine ? 'отправляется…' : 'ждёт сеть') + '</em>' : '') +
+      (c.dirty ? '<em>' + (c.bad ? 'не отправлен' : navigator.onLine ? 'отправляется…' : 'ждёт сеть') + '</em>' : '') +
       (canDelComment(c) ? '<button class="cmdel" type="button" data-cid="' + esc(c.id) + '" aria-label="Удалить отзыв">' + ic('trash', 18, 'currentColor', 1.8) + '</button>' : '') +
       '</div><p>' + esc(c.body) + '</p></div>').join('') : '<p class="pnote">Пока нет отзывов. Расскажите, как клюёт и что стоит знать об этом месте.</p>';
     box.querySelectorAll('.cmdel').forEach((b) => { b.onclick = () => deleteComment(b.dataset.cid); });
@@ -1690,19 +1719,24 @@
   mo.observe(document.body, { childList: true });
 
   /* ---------- deep link: #p=lat,lon,name ---------- */
-  function checkHash() {
+  async function checkHash() {
     const m = /^#p=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(.*)$/.exec(location.hash);
     if (!m) return;
+    // точка из ссылки, скорее всего, уже есть в группе: сначала дождаться синхронизации, иначе получится дубль
+    if (S.code && navigator.onLine !== false && S.sync.state !== 'ok') {
+      toast('Ищу точку в группе…', 4000);
+      try { await Promise.race([syncNow(), new Promise((r) => setTimeout(r, 6000))]); } catch (e) { /* покажем как новую */ }
+    }
     const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
     let name = '';
     try { name = decodeURIComponent(m[3]).slice(0, 60); } catch (e) {}
     history.replaceState(null, '', location.pathname + location.search);
     if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
-    const dup = allSpots().find((s) => Math.abs(s.lat - lat) < 0.0001 && Math.abs(s.lon - lon) < 0.0001);
-    if (dup) { openSpot(dup.id, 'half'); return; }
+    const dup = allSpots().find((s) => Math.abs(s.lat - lat) < 0.0002 && Math.abs(s.lon - lon) < 0.0002);
+    if (dup) { map.setView([dup.lat, dup.lon], Math.max(map.getZoom(), 13)); openSpot(dup.id, 'half'); return; }
     map.setView([lat, lon], 14);
-    S.temp = { lat: lat, lon: lon }; setTempMarker(L.latLng(lat, lon));
-    saveDialog({ lat: lat, lon: lon }, name);
+    // не сохраняем сразу: показываем как временную точку с названием, сохранить можно кнопкой
+    S.sel = null; S.temp = { lat: lat, lon: lon, label: name }; setTempMarker(L.latLng(lat, lon)); renderMarkers(); renderSheet('peek');
   }
 
   /* ---------- init ---------- */
