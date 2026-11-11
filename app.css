@@ -273,3 +273,6 @@ textarea{resize:none;min-height:96px}
 #cmForm{display:flex;flex-direction:column;gap:8px;margin-top:6px}
 .cm-text{width:100%;box-sizing:border-box;border:1.5px solid var(--border);border-radius:16px;padding:12px 14px;font:inherit;font-size:15px;line-height:1.45;background:var(--surface);color:var(--text);resize:vertical;min-height:64px}
 #cmForm .cm-send{align-self:flex-end;flex:none;height:44px;padding:0 22px}
+.cbtn{position:relative}
+.bdg{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:var(--primary);color:var(--on-primary);font-size:12px;font-weight:700;line-height:20px;text-align:center;box-sizing:border-box}
+.bdg[hidden]{display:none}

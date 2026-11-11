@@ -17,6 +17,7 @@
     locate: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22"/>',
     layers: '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12.5l9 5 9-5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    chat: '<path d="M21 11.5a8 8 0 01-11.6 7.1L4 20l1.4-4.6A8 8 0 1121 11.5z"/>',
     camera: '<path d="M21 18a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h3l1.6-2.4h4.8L16 7h3a2 2 0 012 2z"/><circle cx="12" cy="13" r="3.8"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
@@ -489,12 +490,12 @@
       '<div id="miniRow" class="mini"><button class="mini-main" id="bExpand" type="button" aria-label="Развернуть панель"><span id="miniWx" class="mini-wx"></span><span class="mini-title">' + ttl + '</span><span id="miniFish"></span>' + ic('chev_r', 20, 'currentColor', 2, 'transform:rotate(-90deg);color:var(--muted)') + '</button>' +
       '<button class="icon-btn" id="bClose" type="button" aria-label="Закрыть">' + ic('x', 20, 'currentColor', 2) + '</button></div>' +
       '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : 'Новая точка') + '</h2><div class="sub">' + subText(t, saved) + '</div></div>' +
-      '<div class="hbtns">' + (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') +
+      '<div class="hbtns">' + (saved && !t.shared ? '<button class="icon-btn cbtn" id="bComm" type="button" aria-label="Отзывы">' + ic('chat', 22) + '<span class="bdg" id="bdg"></span></button>' : '') + (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') +
       '<button class="icon-btn" id="bCollapse" type="button" aria-label="Свернуть погоду">' + ic('chev_r', 22, 'currentColor', 2, 'transform:rotate(90deg)') + '</button></div></div>' +
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
-      '<div id="extra"><div id="wxStats" class="stats"></div>' + photosHtml(t, saved) + '<div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) + commentsHtml(t) : '') + '</div>' +
+      '<div id="extra"><div id="wxStats" class="stats"></div>' + photosHtml(t, saved) + (saved ? commentsHtml(t) : '') + '<div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) : '') + '</div>' +
       '<div id="actions" class="actions">' +
       (saved
         ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>' + (t.shared ? '' : '<button class="icon-btn sq" id="bPhoto" type="button" aria-label="Добавить фото">' + ic('camera', 22) + '</button>')
@@ -506,6 +507,11 @@
     if (saved) {
       renderPhotoStrip();
       renderComments();
+      const bc = $('#bComm');
+      if (bc) bc.addEventListener('click', () => {
+        if (S.state !== 'full' && S.state !== 'half') applyState('half');
+        setTimeout(() => { const el = $('#cmSec'); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, 120);
+      });
       const bp = $('#bPhoto');
       if (bp) bp.addEventListener('click', () => {
         if (!S.code) { toast('Сначала войдите в группу по ссылке из Telegram'); return; }
@@ -1201,12 +1207,13 @@
   const commentsOf = (id) => S.comments.filter((c) => c.spot_id === id).sort((a, b) => a.created - b.created);
   const nc = (id) => S.comments.reduce((n, c) => n + (c.spot_id === id ? 1 : 0), 0);
   const canDelComment = (c) => (c.owner ? c.owner === S.dev : (!c.author || c.author === S.me));
-  const commentsHtml = (t) => t.shared ? '' : '<section class="cm-sec"><h3>Отзывы <span id="cmN" class="cm-n"></span></h3><div id="cmList"></div><div id="cmForm"></div></section>';
+  const commentsHtml = (t) => t.shared ? '' : '<section class="cm-sec" id="cmSec"><h3>Отзывы <span id="cmN" class="cm-n"></span></h3><div id="cmList"></div><div id="cmForm"></div></section>';
   function renderComments() {
     const box = $('#cmList'), t = S.sel && findSpot(S.sel);
     if (!box || !t || t.shared) return;
     const items = commentsOf(t.id);
     $('#cmN').textContent = items.length || '';
+    const bd = $('#bdg'); if (bd) { bd.textContent = items.length > 99 ? '99+' : (items.length || ''); bd.hidden = !items.length; }
     box.innerHTML = items.length ? items.map((c) =>
       '<div class="cm"><div class="cmh"><b>' + esc(c.author || 'Без имени') + '</b><span>' +
       esc(new Date(c.created).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + '</span>' +
