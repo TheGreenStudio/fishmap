@@ -1,0 +1,58 @@
+# Ежедневная сводка в Telegram-группу «Дикая Рыбалка»: погода в Calgary + новости.
+# Секреты (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+# Чтобы переключить с тестового чата на группу, достаточно заменить TELEGRAM_CHAT_ID.
+name: daily-digest
+on:
+  schedule:
+    # 7:30 по Calgary: зимой (MST) это 14:30 UTC, летом (MDT) 13:30 UTC.
+    # Скрипт сам отправляет только в окне 7:20-12:00 по Calgary и не больше раза в день.
+    - cron: '30 13 * * *'
+    - cron: '30 14 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Только показать сообщение в логе, ничего не отправлять'
+        type: boolean
+        default: true
+      save_state:
+        description: 'Запомнить отправленные новости и дату (для настоящей отправки включать не нужно)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: news-bot
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: news-bot/state.json
+          key: digest-state-none
+          restore-keys: digest-state-
+      - name: Build and send digest
+        id: digest
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Ручной запуск всегда обходит проверку времени; плановый её соблюдает.
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          SAVE_STATE: ${{ (github.event_name == 'schedule' || inputs.save_state) && '1' || '0' }}
+        run: node news-bot/digest.mjs
+      - name: Save state
+        if: steps.digest.outputs.saved == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: news-bot/state.json
+          key: digest-state-${{ github.run_id }}
