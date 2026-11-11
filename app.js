@@ -53,7 +53,10 @@
   });
 
   /* ---------- state ---------- */
+  let dev = lsGet('fishmap.dev', '');
+  if (!dev) { dev = uid(); lsSet('fishmap.dev', dev); }
   const S = {
+    dev: dev,
     spots: [], shared: [], sel: null, temp: null, state: 'peek', loc: null,
     theme: lsGet('fishmap.theme', 'auto'), layer: lsGet('fishmap.layer', 'osm'),
     filter: 'all', q: '', wxKey: '',
@@ -491,7 +494,7 @@
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
-      '<div id="extra"><div id="wxStats" class="stats"></div>' + photosHtml(t, saved) + '<div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) : '') + '</div>' +
+      '<div id="extra"><div id="wxStats" class="stats"></div>' + photosHtml(t, saved) + '<div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) + commentsHtml(t) : '') + '</div>' +
       '<div id="actions" class="actions">' +
       (saved
         ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>' + (t.shared ? '' : '<button class="icon-btn sq" id="bPhoto" type="button" aria-label="Добавить фото">' + ic('camera', 22) + '</button>')
@@ -502,6 +505,7 @@
     $('#bClose').addEventListener('click', closeSheet);
     if (saved) {
       renderPhotoStrip();
+      renderComments();
       const bp = $('#bPhoto');
       if (bp) bp.addEventListener('click', () => {
         if (!S.code) { toast('Сначала войдите в группу по ссылке из Telegram'); return; }
@@ -603,7 +607,7 @@
     const go = () => {
       const name = inp.value.trim();
       if (!name) { inp.focus(); return; }
-      const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', author: S.me || '', created: Date.now(), updated: Date.now(), dirty: true };
+      const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', author: S.me || '', owner: S.dev, created: Date.now(), updated: Date.now(), dirty: true };
       S.spots.push(s); saveLocal(); scheduleSync(); closeModal();
       S.temp = null; setTempMarker(null);
       openSpot(s.id, 'half');
@@ -612,11 +616,12 @@
     $('#fSave').onclick = go;
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   }
+  const canDelete = (s) => (s.owner ? s.owner === S.dev : (!s.author || s.author === S.me));
   function moreMenu(t) {
     openModal('<h3>' + esc(t.name) + '</h3><div class="stack">' +
       (t.shared ? '<p class="sub">Общая точка из файла spots.json</p>' :
         '<button class="btn btn-secondary" id="mRen" type="button">' + ic('edit', 20) + 'Переименовать</button>' +
-        '<button class="btn btn-danger" id="mDel" type="button">' + ic('trash', 20) + 'Удалить точку</button>') +
+        (canDelete(t) ? '<button class="btn btn-danger" id="mDel" type="button">' + ic('trash', 20) + 'Удалить точку</button>' : '<p class="sub">Удалить точку может только её автор' + (t.author ? ': ' + esc(t.author) : '') + '.</p>')) +
       '<button class="btn btn-secondary" id="mCancel" type="button">Закрыть</button></div>');
     $('#mCancel').onclick = closeModal;
     if (t.shared) return;
@@ -628,11 +633,12 @@
       const go = () => { const v = inp.value.trim(); if (!v) return; const s = findSpot(t.id); s.name = v; touch(s); closeModal(); renderMarkers(); renderSheet(S.state); };
       $('#rSave').onclick = go; inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     };
+    if (!$('#mDel')) return;
     $('#mDel').onclick = () => {
       openModal('<h3>Удалить точку?</h3><p class="sub">«' + esc(t.name) + '» ' + (S.code ? 'исчезнет у всех в группе. Это нельзя отменить.' : 'исчезнет с этого устройства. Это нельзя отменить.') + '</p>' +
         '<div class="row"><button class="btn btn-secondary" id="dCancel" type="button">Отмена</button><button class="btn btn-danger" id="dOk" type="button">Удалить</button></div>');
       $('#dCancel').onclick = closeModal;
-      $('#dOk').onclick = () => { S.spots = S.spots.filter((s) => s.id !== t.id); if (isUuid(t.id) && !t.shared) { S.tomb.push(t.id); dropSpotPhotos(t.id); } saveLocal(); scheduleSync(); closeModal(); closeSheet(); toast('Точка удалена'); };
+      $('#dOk').onclick = () => { S.spots = S.spots.filter((s) => s.id !== t.id); if (isUuid(t.id) && !t.shared) { S.tomb.push(t.id); dropSpotPhotos(t.id); dropSpotComments(t.id); } saveLocal(); scheduleSync(); closeModal(); closeSheet(); toast('Точка удалена'); };
     };
   }
 
@@ -675,7 +681,7 @@
       const dist = S.loc ? fmtDist(distance(S.loc, s)) + ' · ' : '';
       const date = s.created ? new Date(s.created).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
       return '<button class="card" type="button" data-id="' + esc(s.id) + '"><span class="thumb">' + ic('fish', 30, 'currentColor', 1.6) + '</span>' +
-        '<span class="ct"><span class="n">' + esc(s.name) + '</span><span class="m">' + dist + ((s.author ? esc(s.author) + ' · ' : '') + (date ? (s.author ? '' : 'сохранена ') + esc(date) : 'общая точка')) + '</span>' +
+        '<span class="ct"><span class="n">' + esc(s.name) + '</span><span class="m">' + dist + ((s.author ? esc(s.author) + ' · ' : '') + (date ? (s.author ? '' : 'сохранена ') + esc(date) : 'общая точка')) + (nc(s.id) ? ' · ' + nc(s.id) + ' ' + plural(nc(s.id), 'отзыв', 'отзыва', 'отзывов') : '') + '</span>' +
         '<span class="w" data-w="' + esc(s.id) + '"></span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     }).join('');
     hydrateListThumbs(box, arr);
@@ -792,7 +798,7 @@
     try {
       return await fetch(SB.url + '/rest/v1/' + path, {
         method: opt.method || 'GET', signal: ctl.signal,
-        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'Content-Type': 'application/json' }, opt.headers || {}),
+        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'Content-Type': 'application/json' }, opt.headers || {}),
         body: opt.body ? JSON.stringify(opt.body) : undefined
       });
     } finally { clearTimeout(to); }
@@ -802,7 +808,7 @@
     if (st === 'busy') return 'Синхронизация…';
     if (st === 'denied') return 'Код не подошёл';
     if (st === 'err') return 'Нет связи' + (S.sync.t ? ', последний раз ' + hhmm(S.sync.t) : '');
-    if (S.photoErr) return 'Фото пока не загрузились, повторю';
+    if (S.photoErr) return 'Часть данных пока не отправилась, повторю';
     return S.sync.t ? 'Обновлено ' + hhmm(S.sync.t) : 'Ожидание';
   }
   function setSync(state) {
@@ -833,10 +839,10 @@
         const snap = new Map(dirty.map((x) => [x.id, x.updated]));
         r = await sb('spots?on_conflict=id', {
           method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: dirty.map((x) => ({ id: x.id, name: x.name, lat: x.lat, lon: x.lon, note: x.note || '', author: x.author || '', created_at: new Date(x.created || Date.now()).toISOString() }))
+          body: dirty.map((x) => ({ id: x.id, name: x.name, lat: x.lat, lon: x.lon, note: x.note || '', author: x.author || '', author_id: x.owner === undefined ? S.dev : (x.owner || null), created_at: new Date(x.created || Date.now()).toISOString() }))
         });
         if (!r.ok) throw new Error('push ' + r.status);
-        dirty.forEach((x) => { if (snap.get(x.id) === x.updated) delete x.dirty; });
+        dirty.forEach((x) => { if (x.owner === undefined) x.owner = S.dev; if (snap.get(x.id) === x.updated) delete x.dirty; });
       }
       r = await sb('spots?select=*&order=created_at.asc');
       if (!r.ok) throw new Error('pull ' + r.status);
@@ -847,12 +853,15 @@
       rows.forEach((row) => {
         const l = local.get(row.id);
         if (l && l.dirty) return;
-        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', author: row.author || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at) };
+        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', author: row.author || '', owner: row.author_id || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at) };
         if (l) Object.assign(l, o); else { S.spots.push(o); added++; }
       });
       S.spots = S.spots.filter((x) => x.shared || x.dirty || remote.has(x.id));
       saveLocal();
-      try { await syncPhotos(); S.photoErr = false; } catch (e) { S.photoErr = true; scheduleSync(30000); }
+      let perr = false;
+      try { await syncPhotos(); } catch (e) { perr = true; }
+      try { await syncComments(); } catch (e) { perr = true; }
+      S.photoErr = perr; if (perr) scheduleSync(30000);
       const first = !S.sync.t;
       setSync('ok');
       refreshAfterSync();
@@ -868,6 +877,7 @@
   function refreshAfterSync() {
     renderMarkers();
     renderPhotoStrip();
+    renderComments();
     if (lv.classList.contains('open')) renderListItems();
     if (S.sel) {
       const x = findSpot(S.sel);
@@ -1173,6 +1183,76 @@
     S.pending = items.map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author, created: x.created, thumbUrl: URL.createObjectURL(x.thumb) }));
     renderPhotoStrip();
   }).catch(() => {});
+
+  /* ---------- отзывы ---------- */
+  S.comments = lsGet('fishmap.v3.comments', []);
+  S.ctomb = lsGet('fishmap.v3.ctomb', []);
+  const saveComments = () => { lsSet('fishmap.v3.comments', S.comments); lsSet('fishmap.v3.ctomb', S.ctomb); };
+  const plural = (n, a, b, c) => { const m = n % 100, d = n % 10; return (m > 10 && m < 15) ? c : d === 1 ? a : (d > 1 && d < 5) ? b : c; };
+  const commentsOf = (id) => S.comments.filter((c) => c.spot_id === id).sort((a, b) => a.created - b.created);
+  const nc = (id) => S.comments.reduce((n, c) => n + (c.spot_id === id ? 1 : 0), 0);
+  const canDelComment = (c) => (c.owner ? c.owner === S.dev : (!c.author || c.author === S.me));
+  const commentsHtml = (t) => t.shared ? '' : '<section class="cm-sec"><h3>Отзывы <span id="cmN" class="cm-n"></span></h3><div id="cmList"></div><div id="cmForm"></div></section>';
+  function renderComments() {
+    const box = $('#cmList'), t = S.sel && findSpot(S.sel);
+    if (!box || !t || t.shared) return;
+    const items = commentsOf(t.id);
+    $('#cmN').textContent = items.length || '';
+    box.innerHTML = items.length ? items.map((c) =>
+      '<div class="cm"><div class="cmh"><b>' + esc(c.author || 'Без имени') + '</b><span>' +
+      esc(new Date(c.created).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + '</span>' +
+      (c.dirty ? '<em>' + (navigator.onLine ? 'отправляется…' : 'ждёт сеть') + '</em>' : '') +
+      (canDelComment(c) ? '<button class="cmdel" type="button" data-cid="' + esc(c.id) + '" aria-label="Удалить отзыв">' + ic('trash', 18, 'currentColor', 1.8) + '</button>' : '') +
+      '</div><p>' + esc(c.body) + '</p></div>').join('') : '<p class="pnote">Пока нет отзывов. Расскажите, как клюёт и что стоит знать об этом месте.</p>';
+    box.querySelectorAll('.cmdel').forEach((b) => { b.onclick = () => deleteComment(b.dataset.cid); });
+    const form = $('#cmForm');
+    if (form && !form.firstChild) {
+      if (!S.code) { form.innerHTML = '<p class="pnote">Войдите в группу по ссылке из Telegram, чтобы оставлять отзывы.</p>'; return; }
+      form.innerHTML = '<textarea id="cmText" class="cm-text" rows="2" maxlength="1000" aria-label="Ваш отзыв" placeholder="Ваш отзыв: что клюёт, как прошла рыбалка…"></textarea>' +
+        '<button class="btn btn-primary sm cm-send" id="cmSend" type="button">Отправить</button>';
+      $('#cmSend').onclick = () => sendComment(t.id);
+    }
+  }
+  function sendComment(spotId) {
+    const ta = $('#cmText'), v = ta ? ta.value.trim() : '';
+    if (!v) { if (ta) ta.focus(); return; }
+    if (!S.me) { askName(() => sendComment(spotId)); return; }
+    S.comments.push({ id: uid(), spot_id: spotId, author: S.me, owner: S.dev, body: v.slice(0, 1000), created: Date.now(), dirty: true });
+    saveComments(); ta.value = ''; renderComments(); scheduleSync(0);
+  }
+  function deleteComment(id) {
+    openModal('<h3>Удалить отзыв?</h3><p class="sub">Он исчезнет у всех в группе.</p>' +
+      '<div class="row"><button class="btn btn-secondary" id="cdCancel" type="button">Отмена</button><button class="btn btn-danger" id="cdOk" type="button">Удалить</button></div>');
+    $('#cdCancel').onclick = closeModal;
+    $('#cdOk').onclick = () => {
+      const c = S.comments.find((x) => x.id === id);
+      S.comments = S.comments.filter((x) => x.id !== id);
+      if (c && !c.dirty) S.ctomb.push(id);
+      saveComments(); closeModal(); renderComments(); scheduleSync(0);
+    };
+  }
+  function dropSpotComments(spotId) { S.comments = S.comments.filter((c) => c.spot_id !== spotId); saveComments(); }
+  async function syncComments() {
+    for (const id of S.ctomb.slice()) {
+      const r = await sb('spot_comments?id=eq.' + id, { method: 'DELETE' });
+      if (!r.ok) throw new Error('cdel ' + r.status);
+      S.ctomb = S.ctomb.filter((x) => x !== id); saveComments();
+    }
+    const ids = new Set(S.spots.map((x) => x.id));
+    const dirty = S.comments.filter((c) => c.dirty && ids.has(c.spot_id) && isUuid(c.spot_id));
+    if (dirty.length) {
+      const r = await sb('spot_comments?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+        body: dirty.map((c) => ({ id: c.id, spot_id: c.spot_id, author: c.author || '', author_id: c.owner || null, body: c.body, created_at: new Date(c.created).toISOString() })) });
+      if (!r.ok) throw new Error('cpush ' + r.status);
+      dirty.forEach((c) => { delete c.dirty; }); saveComments();
+    }
+    const r2 = await sb('spot_comments?select=*&order=created_at.asc');
+    if (!r2.ok) throw new Error('cpull ' + r2.status);
+    const gone = new Set(S.ctomb);
+    const rows = (await r2.json()).filter((x) => ids.has(x.spot_id) && !gone.has(x.id))
+      .map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author || '', owner: x.author_id || '', body: x.body, created: Date.parse(x.created_at) }));
+    S.comments = rows.concat(S.comments.filter((c) => c.dirty && ids.has(c.spot_id))); saveComments();
+  }
 
   /* ---------- deep link: #p=lat,lon,name ---------- */
   function checkHash() {
