@@ -226,6 +226,17 @@ const fmtT = (t) => {
   return r > 0 ? `+${r}` : r < 0 ? `−${-r}` : '0';
 };
 
+// Фраза про лёд. frozen: приложение считает, что лёд мог встать (мороз или недавняя череда морозов);
+// winterCold: средняя температура держится не выше минус 5. Должна совпадать с режимом «зима» в блоке точек.
+export function iceSentence({ frozen, winterCold }, tail) {
+  if (winterCold) return 'Установилась зимняя погода: лёд мог встать, толщину проверяйте сами, по погоде её не определить.';
+  if (frozen) return 'После морозов оттепель: лёд мог остаться, но он ненадёжен, толщину проверяйте сами.';
+  return tail;
+}
+
+// Режим центра карты (как «Авто» в приложении). Данные кэшируются и используются и в погоде, и в блоке точек.
+const centerCtx = () => Promise.all([wxFor(LAT, LON), histFor(LAT, LON)]).then(([w, h]) => fishCtx(w, h));
+
 async function weatherBlock(today) {
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${LAT}&longitude=${LON}`
@@ -250,16 +261,20 @@ async function weatherBlock(today) {
   // средняя температура за 5 прошлых и 2 дня прогноза не выше минус 5.
   const win = d.temperature_2m_mean.slice(i0 - 5, i0 + 2).filter((t) => t != null);
   const winMean = win.reduce((a, b) => a + b, 0) / win.length;
-  if (winMean <= -5) {
-    parts.push('Установилась зимняя погода: лёд мог встать, толщину проверяйте сами, по погоде её не определить.');
-  } else {
+  let ctx = null;
+  try { ctx = await centerCtx(); } catch (e) { console.error(`Режим льда по приложению не определён (${e.message}), считаю по погоде`); }
+  const frozen = ctx ? ctx.autoIce : winMean <= -5;
+  const winterCold = ctx ? ctx.avg <= -5 : winMean <= -5;
+  {
     const future = d.time.map((date, i) => ({ date, min: d.temperature_2m_min[i] })).slice(i0);
     const cold = future.find((x) => x.min <= -5);
     const lowest = Math.min(...future.map((x) => x.min));
-    if (cold) parts.push(`Похолодание: с ${ruDay(cold.date)} ночью до ${fmtT(Math.min(...future.filter((x) => x.date >= cold.date).map((x) => x.min)))}. Льда пока ждать не стоит.`);
-    else if (Math.round(lowest) <= -1) parts.push(`Ночные заморозки слабые (до ${fmtT(lowest)}), льда нет.`);
-    else if (lowest <= 0.5) parts.push('Ночью около нуля, льда нет.');
-    else parts.push('Заморозков на неделю не видно, льда нет.');
+    let tail;
+    if (cold) tail = `Похолодание: с ${ruDay(cold.date)} ночью до ${fmtT(Math.min(...future.filter((x) => x.date >= cold.date).map((x) => x.min)))}. Льда пока ждать не стоит.`;
+    else if (Math.round(lowest) <= -1) tail = `Ночные заморозки слабые (до ${fmtT(lowest)}), льда по погоде не ожидается.`;
+    else if (lowest <= 0.5) tail = 'Ночью около нуля, льда по погоде не ожидается.';
+    else tail = 'Заморозков на неделю не видно, льда по погоде не ожидается.';
+    parts.push(iceSentence({ frozen, winterCold }, tail));
   }
   return `<b>Погода.</b> ${parts.join(' ')}`;
 }
@@ -268,7 +283,6 @@ async function weatherBlock(today) {
 
 const SB_URL = 'https://caxuvdrzuurhdtmqbkbg.supabase.co';
 const SB_KEY = 'sb_publishable_gS7j7lRfJV5rz-nr6AzV7g_Q9lfGNzt'; // публичный ключ, как в приложении
-const MAP_CENTER = { lat: LAT, lon: LON };                       // центр карты (по нему приложение выбирает сезон)
 
 async function loadSpots() {
   const code = E.SUPABASE_GROUP_CODE;
@@ -316,8 +330,7 @@ const histFor = (lat, lon) => {
 async function spotsBlock() {
   const spots = await loadSpots();
   // сезон карты: как «Авто» в приложении, по погоде и морозам в центре карты
-  const [cw, ch] = await Promise.all([wxFor(MAP_CENTER.lat, MAP_CENTER.lon), histFor(MAP_CENTER.lat, MAP_CENTER.lon)]);
-  const winter = fishCtx(cw, ch).autoIce;
+  const winter = (await centerCtx()).autoIce;
   const season = winter ? 'winter' : 'summer';
   const inSeason = spots.filter((s) => { const q = s.season || 'summer'; return q === 'both' || q === season; });
   console.log(`Клёв: точек всего ${spots.length}, в сезоне «${winter ? 'зима' : 'лето'}» ${inSeason.length}`);
@@ -452,12 +465,12 @@ async function main() {
   const problems = [];   // что пошло не так, но сводку всё же отправили: в конце помечаем запуск ошибкой, чтобы пришло письмо от GitHub
 
   try { blocks.push(await weatherBlock(today)); }
-  catch (e) { console.error(`Погода недоступна: ${e.message}`); }
+  catch (e) { console.error(`Погода недоступна: ${e.message}`); problems.push('блок «Погода» не получен'); }
 
   try {
     const sb = await spotsBlock();
     if (sb) blocks.push(sb);
-  } catch (e) { console.error(`Клёв по точкам недоступен: ${e.message}`); }
+  } catch (e) { console.error(`Клёв по точкам недоступен: ${e.message}`); problems.push('блок «Топ точек» не получен'); }
 
   const used = new Set();
   for (const s of SECTIONS) {
@@ -465,7 +478,7 @@ async function main() {
       const item = await pickNews(s, state, used);
       if (item) { blocks.push(newsBlock(s, item)); used.add(norm(item.title)); picked.push(norm(item.title)); }
       else console.log(`${s.title}: свежих новостей нет, раздел пропущен.`);
-    } catch (e) { console.error(`${s.title}: ошибка ${e.message}`); }
+    } catch (e) { console.error(`${s.title}: ошибка ${e.message}`); problems.push(`раздел «${s.title}» не получен`); }
   }
 
   if (!blocks.length) { console.error('Нечего отправлять.'); process.exit(1); }
@@ -473,7 +486,11 @@ async function main() {
   const head = `<b>Дикая Рыбалка. ${cap(ruLocal(now, { weekday: 'long' }))}, ${ruLocal(now, { day: 'numeric', month: 'long' })}</b>`;
   const text = [head, ...blocks].join('\n\n');
 
-  if (DRY) { console.log('--- DRY RUN, ничего не отправлено ---\n' + text); return; }
+  if (DRY) {
+    console.log('--- DRY RUN, ничего не отправлено ---\n' + text);
+    for (const p of problems) console.log(`::warning::${p}`);
+    return;
+  }
   if (!E.TELEGRAM_BOT_TOKEN || !E.TELEGRAM_CHAT_ID) {
     console.error('Не заданы TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID.'); process.exit(1);
   }
