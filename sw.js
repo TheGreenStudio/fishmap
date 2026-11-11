@@ -1,6 +1,7 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v6';
+const SHELL = 'fishmap-shell-v7';
 const TILES = 'fishmap-tiles-v1';
+const PHOTOS = 'fishmap-photos-v1'; // фото из группы, их нельзя удалять при обновлении
 const MAX_TILES = 3000;
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tile.opentopomap.org'];
 
@@ -18,7 +19,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== SHELL && k !== TILES).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== SHELL && k !== TILES && k !== PHOTOS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
