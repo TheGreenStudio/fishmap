@@ -125,7 +125,7 @@
   const fmtC = (x) => (x < 0 ? '−' : '') + Math.abs(x).toFixed(4);
   const coordsText = (p) => fmtC(p.lat) + ', ' + fmtC(p.lon);
   const mmHg = (h) => rnd(h * 0.75006);
-  const dirName = (d) => ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'][rnd(d / 45) % 8];
+  const dirName = (d) => ['северный', 'северо-восточный', 'восточный', 'юго-восточный', 'южный', 'юго-западный', 'западный', 'северо-западный'][rnd(d / 45) % 8];
   const hhmm = (t) => new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   function fmtDist(m) { return m < 1000 ? rnd(m / 10) * 10 + ' м' : (m < 10000 ? (m / 1000).toFixed(1).replace('.', ',') : rnd(m / 1000)) + ' км'; }
   function distance(a, b) {
@@ -151,6 +151,134 @@
     return ['cloud', ''];
   }
 
+  /* ---------- fishing score (0–100) ----------
+     Эвристика по погоде, не гарантия клёва. Веса: давление 25, температура 25,
+     ветер 20, свет/облачность 15, осадки 10, время суток 5. */
+  function interp(pts, x) {
+    if (x <= pts[0][0]) return pts[0][1];
+    for (let i = 1; i < pts.length; i++) {
+      if (x <= pts[i][0]) { const a = pts[i - 1], b = pts[i]; return a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]); }
+    }
+    return pts[pts.length - 1][1];
+  }
+  const F_TEMP = [[-15, 0], [-5, 6], [3, 16], [8, 25], [20, 25], [27, 15], [35, 3], [40, 0]];
+  const F_PDELTA = [[-8, 6], [-5, 12], [-3, 18], [-1, 18], [0, 14], [1, 13], [3, 10], [6, 5], [9, 3]];
+  const F_PABS = [[980, 0], [995, 2], [1005, 6], [1010, 7], [1022, 7], [1030, 4], [1040, 2]];
+  const F_WIND = [[0, 20], [8, 20], [14, 15], [20, 8], [28, 2], [36, 0]];
+  const F_CLOUD = [[0, 6], [30, 9], [60, 13], [85, 15], [100, 15]];
+  const F_RAIN = [[0, 10], [0.5, 9], [3, 6], [8, 2], [15, 0]];
+
+  function codePrecip(c) {
+    if (c >= 95) return 15;
+    if (c === 80) return 4; if (c === 81) return 8; if (c === 82) return 12;
+    if (c === 85 || c === 86) return 5;
+    if (c >= 71 && c <= 77) return 3;
+    if (c === 65 || c === 67) return 10;
+    if (c === 63 || c === 66) return 5;
+    if (c === 61) return 2;
+    if (c >= 51 && c <= 57) return 1.5;
+    return 0;
+  }
+  function codeCloud(c) {
+    if (c === 0) return 5; if (c === 1) return 25; if (c === 2) return 55; if (c === 3) return 90;
+    return c === 45 || c === 48 ? 100 : 90;
+  }
+  const hourOf = (s) => +s.slice(11, 13) + (+s.slice(14, 16)) / 60;
+  function hm(h) {
+    const m = Math.round(h * 6) * 10, hh = ((Math.floor(m / 60) % 24) + 24) % 24, mm = m % 60;
+    return hh + ':' + (mm < 10 ? '0' : '') + mm;
+  }
+  function levelOf(s) { return s < 30 ? 'bad' : s < 50 ? 'low' : s < 70 ? 'mid' : s < 85 ? 'good' : 'top'; }
+  const LEVEL_TXT = { bad: 'Плохо', low: 'Слабо', mid: 'Средне', good: 'Хорошо', top: 'Отлично' };
+
+  function fishScore(i) {
+    const parts = [];
+    // температура воздуха (замена температуры воды)
+    const t = i.temp;
+    parts.push({ name: 'Температура', max: 25, pts: interp(F_TEMP, t),
+      text: fmtT(t) + (t < -5 ? ', сильный холод' : t < 3 ? ', холодно' : t < 8 ? ', прохладно' : t <= 20 ? ', комфортно' : t <= 27 ? ', тепло' : ', жарко, вода может перегреться') });
+    // давление: тренд за 6 ч + абсолютное значение
+    const dp = i.dp, dpts = dp == null ? 14 : interp(F_PDELTA, dp);
+    const pw = dp == null ? 'тренд неизвестен' : dp <= -4.5 ? 'быстро падает (идёт фронт)' : dp < -1 ? 'медленно падает' : dp <= 1 ? 'стабильно' : dp < 4.5 ? 'растёт' : 'быстро растёт';
+    parts.push({ name: 'Давление', max: 25, pts: dpts + interp(F_PABS, i.pressure), text: mmHg(i.pressure) + ' мм, ' + pw });
+    // ветер
+    const eff = i.wind + 0.5 * Math.max(0, i.gust - i.wind);
+    parts.push({ name: 'Ветер', max: 20, pts: interp(F_WIND, eff),
+      text: (i.dayMode ? 'до ' : '') + rnd(i.wind) + ' км/ч, порывы ' + rnd(i.gust) + (eff <= 8 ? ', слабый' : eff <= 15 ? ', лёгкий' : eff <= 22 ? ', заметный' : eff <= 30 ? ', сильный' : ', очень сильный') });
+    // облачность / свет
+    parts.push({ name: 'Свет', max: 15, pts: interp(F_CLOUD, i.cloud),
+      text: rnd(i.cloud) + '% облаков' + (i.cloud >= 60 ? ', рассеянный свет' : i.cloud < 30 ? ', яркое солнце, рыба осторожнее' : '') });
+    // осадки
+    parts.push({ name: 'Осадки', max: 10, pts: interp(F_RAIN, i.precip),
+      text: i.precip < 0.2 ? 'без осадков' : (i.precip < 10 ? i.precip.toFixed(1).replace('.', ',') : rnd(i.precip)) + ' мм' });
+    // время суток
+    let tp, tt;
+    if (i.dayMode) { tp = 5; tt = 'считаем лучшее время суток'; }
+    else {
+      const sr = i.sr == null ? 6.5 : i.sr, ss = i.ss == null ? 19 : i.ss, h = i.hour;
+      if ((h >= sr - 1 && h <= sr + 2.5) || (h >= ss - 2.5 && h <= ss + 1)) { tp = 5; tt = 'утро или вечер, самое активное время'; }
+      else if (h > sr && h < ss) { tp = 3; tt = 'день'; }
+      else { tp = 2; tt = 'ночь'; }
+    }
+    parts.push({ name: 'Время суток', max: 5, pts: tp, text: tt });
+
+    let score = 0;
+    parts.forEach((p) => { p.pts = rnd(p.pts); score += p.pts; });
+    let warn = '';
+    if (i.code >= 95) { score = Math.min(score, 15); warn = 'Гроза: рыбачить небезопасно'; }
+    else if (i.gust >= 65) { score = Math.min(score, 25); warn = 'Очень сильный ветер: рыбалка опасна'; }
+    else if (t <= -25) { score = Math.min(score, 20); warn = 'Сильный мороз'; }
+    score = clamp(rnd(score), 0, 100);
+    return { score: score, lvl: levelOf(score), label: LEVEL_TXT[levelOf(score)], parts: parts, warn: warn };
+  }
+  function fishNow(d, series) {
+    const c = d.current, dy = d.daily;
+    return fishScore({
+      temp: c.temperature_2m, pressure: c.pressure_msl,
+      dp: series.length >= 7 ? series[series.length - 1] - series[series.length - 7] : null,
+      wind: c.wind_speed_10m, gust: c.wind_gusts_10m, cloud: c.cloud_cover,
+      precip: Math.max((dy.precipitation_sum[0] || 0) * 0.6, codePrecip(c.weather_code)), code: c.weather_code,
+      hour: hourOf(c.time), sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null
+    });
+  }
+  function fishDay(d, i) {
+    const dy = d.daily, date = dy.time[i], H = d.hourly || {};
+    const at = (h) => (H.time || []).indexOf(date + 'T' + h + ':00');
+    const a = at('09'), b = at('15');
+    const pa = a >= 0 ? H.pressure_msl[a] : null, pb = b >= 0 ? H.pressure_msl[b] : null;
+    return fishScore({
+      temp: dy.temperature_2m_min[i] + 0.4 * (dy.temperature_2m_max[i] - dy.temperature_2m_min[i]),
+      pressure: pb != null ? pb : 1013, dp: pa != null && pb != null ? pb - pa : null,
+      wind: (dy.wind_speed_10m_max[i] || 0) * 0.75, gust: (dy.wind_gusts_10m_max[i] || 0) * 0.85,
+      cloud: codeCloud(dy.weather_code[i]), precip: Math.max(dy.precipitation_sum[i] || 0, codePrecip(dy.weather_code[i]) * 0.5),
+      code: dy.weather_code[i], dayMode: true
+    });
+  }
+  function ringHtml(score) {
+    const circ = 2 * Math.PI * 16;
+    return '<span class="ringw"><svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="16" fill="none" stroke="var(--ringbg)" stroke-width="4"/>' +
+      '<circle cx="20" cy="20" r="16" fill="none" stroke="var(--fc)" stroke-width="4" stroke-linecap="round" stroke-dasharray="' + (circ * score / 100).toFixed(1) + ' ' + circ.toFixed(1) + '" transform="rotate(-90 20 20)"/></svg><span class="rn">' + score + '</span></span>';
+  }
+  function showFish() {
+    const f = S.fish; if (!f) return;
+    const bw = f.days.reduce((b, x, i) => (x.score > (b < 0 ? -1 : f.days[b].score) ? i : b), -1);
+    const rows = f.now.parts.map((p) => {
+      const pct = rnd(p.pts / p.max * 100);
+      return '<div class="fp" data-l="' + levelOf(pct) + '"><div class="fh"><span>' + esc(p.name) + '</span><span>' + p.pts + ' из ' + p.max + '</span></div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div><div class="ft">' + esc(p.text) + '</div></div>';
+    }).join('');
+    const best = f.sr != null && f.ss != null
+      ? '<p class="fbest">' + ic('sun', 18, 'currentColor', 1.8) + '<span>Лучшее время сегодня: ' + hm(f.sr - 1) + '–' + hm(f.sr + 2.5) + ' и ' + hm(f.ss - 2.5) + '–' + hm(f.ss + 1) + '</span></p>' : '';
+    const days = f.days.map((x, i) => '<div class="fd" data-l="' + x.lvl + '"><span class="d">' + esc(x.name) + '</span><span class="fs' + (i === bw && x.score >= 50 ? ' best' : '') + '">' + x.score + '</span></div>').join('');
+    openModal('<div class="fhead" data-l="' + f.now.lvl + '">' + ringHtml(f.now.score) + '<div><h3>Клёв: ' + esc(f.now.label) + '</h3><p class="sub">' + f.now.score + ' из 100 · по погоде сейчас</p></div></div>' +
+      (f.now.warn ? '<p class="fwarn">' + ic('storm', 18, 'currentColor', 1.8) + '<span>' + esc(f.now.warn) + '</span></p>' : '') +
+      '<div class="fparts">' + rows + '</div>' + best +
+      '<h4 class="fh4">Лучшие дни</h4><div class="fdays">' + days + '</div>' +
+      '<p class="fnote">Это ориентир по погоде, не гарантия. Не учитываются температура и уровень воды, вид рыбы и ваша точка. Давление считается косвенным признаком: прямого научного подтверждения связи с клёвом мало, зато много наблюдений рыбаков.</p>' +
+      '<div class="row"><button class="btn btn-primary" id="fOk" type="button">Понятно</button></div>');
+    $('#fOk').onclick = closeModal;
+  }
+
   /* ---------- weather ---------- */
   async function getWeather(lat, lon) {
     const key = 'fishmap.wx.' + lat.toFixed(2) + ',' + lon.toFixed(2);
@@ -159,7 +287,7 @@
     const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
       '&current=temperature_2m,apparent_temperature,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_gusts_10m,wind_direction_10m' +
       '&hourly=pressure_msl&past_hours=24' +
-      '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max' +
+      '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset' +
       '&forecast_days=4&timezone=auto&wind_speed_unit=kmh';
     try {
       const ctl = new AbortController();
@@ -214,13 +342,25 @@
       '<div class="desc"><span>' + esc(txt) + '</span><span>Ощущается ' + fmtT(c.apparent_temperature) + '</span></div></div>' +
       (res.stale ? '<div class="stale">' + ic('cloud_off', 18, 'currentColor', 2) + '<span>Нет сети, данные от ' + hhmm(res.t) + '</span></div>' : '');
 
+    const fnow = fishNow(d, series);
+    const fdays = dy.time.map((tm, i) => {
+      const fd = fishDay(d, i);
+      return { name: i === 0 ? 'Сегодня' : new Date(tm + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' }), score: fd.score, lvl: fd.lvl };
+    });
+    S.fish = { now: fnow, days: fdays, sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null };
+    let bestDay = -1;
+    fdays.forEach((x, i) => { if (x.score >= 50 && (bestDay < 0 || x.score > fdays[bestDay].score)) bestDay = i; });
+    $('#wxFish').innerHTML = '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
+      ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(fnow.warn || 'По погоде · почему такая оценка') + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
+    $('#bFish').addEventListener('click', showFish);
+
     $('#wxChips').innerHTML =
-      '<span class="chip">' + ic('wind', 18) + dirName(c.wind_direction_10m) + ' ' + rnd(c.wind_speed_10m) + ' км/ч</span>' +
+      '<span class="chip">' + ic('wind', 18) + rnd(c.wind_speed_10m) + ' км/ч</span>' +
       '<span class="chip">' + ic('gauge', 18) + mmHg(c.pressure_msl) + ' мм' + (trIcon ? '<span class="fall">' + trIcon + '</span>' : '') + '</span>' +
       '<span class="chip">' + ic('drop', 18) + precipTxt + '</span>';
 
     $('#wxStats').innerHTML =
-      '<div class="stat"><span class="l">' + ic('arrow_up', 14, 'currentColor', 2.2, rot) + 'Ветер</span><span class="v">' + dirName(c.wind_direction_10m) + ' ' + rnd(c.wind_speed_10m) + ' км/ч</span><span class="s">порывы до ' + rnd(c.wind_gusts_10m) + '</span></div>' +
+      '<div class="stat"><span class="l">' + ic('arrow_up', 14, 'currentColor', 2.2, rot) + 'Ветер</span><span class="v">' + rnd(c.wind_speed_10m) + ' км/ч</span><span class="s">' + dirName(c.wind_direction_10m) + ', порывы ' + rnd(c.wind_gusts_10m) + '</span></div>' +
       '<div class="stat"><span class="l">' + ic('gauge', 14, 'currentColor', 2) + 'Давление</span><span class="v">' + mmHg(c.pressure_msl) + ' мм</span><span class="s">' + tr.text + '</span></div>' +
       '<div class="stat"><span class="l">' + ic('cloud', 14, 'currentColor', 2) + 'Облачность</span><span class="v">' + rnd(c.cloud_cover) + '%</span><span class="s">' + esc(txt.toLowerCase()) + '</span></div>' +
       '<div class="stat"><span class="l">' + ic('drop', 14, 'currentColor', 2) + 'Осадки</span><span class="v">' + precipTxt + '</span><span class="s">сегодня</span></div>';
@@ -228,8 +368,9 @@
     $('#wxForecast').innerHTML = '<div class="forecast">' + dy.time.map((tm, i) => {
       const dt = new Date(tm + 'T12:00:00');
       const nm = i === 0 ? 'Сегодня' : dt.toLocaleDateString('ru-RU', { weekday: 'short' });
-      return '<div class="fday"><span class="d">' + esc(nm) + '</span>' + ic(wmo(dy.weather_code[i])[0], 26, 'currentColor', 1.6) +
-        '<span class="hi">' + fmtT(dy.temperature_2m_max[i]) + '</span><span class="lo">' + fmtT(dy.temperature_2m_min[i]) + '</span></div>';
+      return '<div class="fday" data-l="' + fdays[i].lvl + '"><span class="d">' + esc(nm) + '</span>' + ic(wmo(dy.weather_code[i])[0], 26, 'currentColor', 1.6) +
+        '<span class="hi">' + fmtT(dy.temperature_2m_max[i]) + '</span><span class="lo">' + fmtT(dy.temperature_2m_min[i]) + '</span>' +
+        '<span class="fs' + (i === bestDay ? ' best' : '') + '" title="Клёв ' + fdays[i].score + ' из 100" aria-label="Клёв ' + fdays[i].score + ' из 100">' + fdays[i].score + '</span></div>';
     }).join('') + '</div>';
 
     const w = Math.min(window.innerWidth, 480) - 40 - 32;
@@ -246,6 +387,7 @@
     if (S.wxKey !== key) return;
     if (!res) {
       $('#wxNow').innerHTML = '<div class="err">' + ic('cloud_off', 24, 'currentColor', 1.8) + '<span>Нет сети и нет сохранённой погоды для этого места. Откройте карту с интернетом один раз.</span></div>';
+      $('#wxFish').innerHTML = ''; S.fish = null;
       $('#wxChips').innerHTML = ''; $('#wxStats').innerHTML = ''; $('#wxForecast').innerHTML = ''; $('#wxSpark').innerHTML = '';
       layoutSheet();
       return;
@@ -324,6 +466,7 @@
       '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : 'Новая точка') + '</h2><div class="sub">' + (saved ? 'Сохранено · ' : '') + coordsText(t) + '</div></div>' +
       (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') + '</div>' +
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
+      '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
       '<div id="extra"><div id="wxStats" class="stats"></div><div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) : '') + '</div>' +
       '<div id="actions" class="actions">' +
@@ -509,7 +652,10 @@
     arr.forEach((s) => getWeather(s.lat, s.lon).then((r) => {
       const el = box.querySelector('[data-w="' + s.id + '"]'); if (!el || !r) return;
       const c = r.data.current;
-      el.innerHTML = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + dirName(c.wind_direction_10m) + ' ' + rnd(c.wind_speed_10m) + ' км/ч';
+      let fs = null;
+      try { fs = fishNow(r.data, pressureSeries(r.data)); } catch (e) { /* нет данных для оценки */ }
+      el.innerHTML = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч' +
+        (fs ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
     }));
   }
   $('#bList').addEventListener('click', openList);
