@@ -48,6 +48,7 @@
     download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
     trash: '<path d="M5 7h14M10 4h4M7 7l1 13h8l1-13M10 11v6M14 11v6"/>',
+    fishw: '<g transform="translate(1 4.5) scale(0.82) translate(0.5 0)"><path d="M2.5 12c2.6-4 6.2-5.3 10-4 1.6.6 3 1.6 4 3l4.5-3.2v8.4L16.5 13c-1 1.4-2.4 2.4-4 3-3.8 1.3-7.4 0-10-4z"/><circle cx="8" cy="11" r="0.6"/></g><g stroke-width="1.5"><path d="M17.5 2.6v7.2M14.4 4.4l6.2 3.6M14.4 8l6.2-3.6"/></g>',
     fish: '<path d="M2.5 12c2.6-4 6.2-5.3 10-4 1.6.6 3 1.6 4 3l4.5-3.2v8.4L16.5 13c-1 1.4-2.4 2.4-4 3-3.8 1.3-7.4 0-10-4z"/><circle cx="8" cy="11" r="0.6"/>'
   };
   const ic = (n, size, color, sw, extra) =>
@@ -84,6 +85,15 @@
   const allSpots = () => S.spots;
   const findSpot = (id) => S.spots.find((s) => s.id === id);
 
+  /* ---------- сезоны: лето / зима / оба ---------- */
+  const SEAS = { summer: 'Лето', winter: 'Зима', both: 'Оба сезона' };
+  const calSeason = () => { const m = new Date().getMonth(); return (m >= 10 || m <= 2) ? 'winter' : 'summer'; };   // пока нет данных о погоде: ноябрь-март зимой
+  S.autoSeason = lsGet('fishmap.autoSeason', null) || calSeason();
+  const seasonOf = (s) => s.season || (s.shared ? 'both' : 'summer');
+  const curSeason = () => (S.fishMode === 'ice' ? 'winter' : S.fishMode === 'open' ? 'summer' : S.autoSeason);
+  const inSeason = (s) => { const q = seasonOf(s); return q === 'both' || q === curSeason(); };
+  const seasonSpots = () => S.spots.filter(inSeason);
+
   /* ---------- theme ---------- */
   const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   function applyTheme() {
@@ -115,23 +125,25 @@
   const spotMarkers = new Map();
   let tempMarker = null, meMarker = null;
 
-  function pinHtml(kind, sel) {
-    const glyph = kind === 'temp' ? P.plus : P.fish;
-    return '<div class="pinwrap ' + (kind === 'temp' ? 'temp ' : '') + (sel ? 'sel' : '') + '"><div class="ring"></div>' +
+  function pinHtml(kind, sel, winter) {
+    const glyph = kind === 'temp' ? P.plus : (winter ? P.fishw : P.fish);
+    return '<div class="pinwrap ' + (kind === 'temp' ? 'temp ' : '') + (winter && kind !== 'temp' ? 'winter ' : '') + (sel ? 'sel' : '') + '"><div class="ring"></div>' +
       '<svg width="44" height="52" viewBox="0 0 44 52" aria-hidden="true"><path class="pin-body" d="M22 50C22 50 5 33 5 21a17 17 0 0134 0c0 12-17 29-17 29z"/>' +
       '<g class="pin-glyph" transform="translate(10 9)">' + glyph + '</g></svg></div>';
   }
-  const pinIcon = (kind, sel) => L.divIcon({ className: '', html: pinHtml(kind, sel), iconSize: [44, 52], iconAnchor: [22, 50] });
+  const pinIcon = (kind, sel, winter) => L.divIcon({ className: '', html: pinHtml(kind, sel, winter), iconSize: [44, 52], iconAnchor: [22, 50] });
 
   function renderMarkers() {
     spotMarkers.forEach((m) => m.remove());
     spotMarkers.clear();
-    allSpots().forEach((s) => {
-      const m = L.marker([s.lat, s.lon], { icon: pinIcon('saved', S.sel === s.id), title: s.name, keyboard: true }).addTo(map);
+    const win = curSeason() === 'winter';
+    // выбранная точка видна всегда, даже если она другого сезона (например, открыта из поиска)
+    allSpots().filter((s) => inSeason(s) || S.sel === s.id).forEach((s) => {
+      const m = L.marker([s.lat, s.lon], { icon: pinIcon('saved', S.sel === s.id, win), title: s.name, keyboard: true }).addTo(map);
       m.on('click', () => openSpot(s.id, 'half'));
       spotMarkers.set(s.id, m);
     });
-    $('#count').textContent = allSpots().length;
+    $('#count').textContent = seasonSpots().length;
   }
   function setTempMarker(ll) {
     if (tempMarker) tempMarker.remove();
@@ -359,9 +371,10 @@
     const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 10;
     const cat = iceCategory(past);
     // авто: подлёдная при морозах, а также когда лёд, по оценке, уже встал (оттепель среди зимы режим не меняет)
-    const ice = mode === 'ice' || (mode === 'auto' && (avg <= -5 || cat === 'check' || cat === 'ok'));
+    const autoIce = avg <= -5 || cat === 'check' || cat === 'ok';
+    const ice = mode === 'ice' || (mode === 'auto' && autoIce);
     const yMax = past.length ? past[past.length - 1].mx : -99;
-    return { ice: ice, mode: mode, avg: avg, cat: cat, yMax: yMax };
+    return { ice: ice, autoIce: autoIce, mode: mode, avg: avg, cat: cat, yMax: yMax };
   }
   const thawOf = (d, ctx, i) => {
     const mx = d.daily.temperature_2m_max;
@@ -412,8 +425,8 @@
       ? '<p class="fbest">' + ic('sun', 18, 'currentColor', 1.8) + '<span>Лучшее время сегодня: ' + hm(f.sr - 1) + '–' + hm(f.sr + 2.5) + ' и ' + hm(f.ss - 2.5) + '–' + hm(f.ss + 1) + '</span></p>' : '';
     const days = f.days.map((x, i) => '<div class="fd" data-l="' + x.lvl + '"><span class="d">' + esc(x.name) + '</span><span class="fs' + (i === bw && x.score >= 50 ? ' best' : '') + '">' + x.score + '</span></div>').join('');
     const ice = f.ctx.ice, md = f.ctx.mode;
-    const seg = '<div class="seg" id="segFish" role="group" aria-label="Режим рыбалки">' + [['auto', 'Авто'], ['open', 'Вода'], ['ice', 'Лёд']].map((x) => '<button type="button" data-v="' + x[0] + '" aria-pressed="' + (md === x[0]) + '">' + x[1] + '</button>').join('') + '</div>';
-    const modeTxt = (ice ? 'Подлёдная рыбалка' : 'Открытая вода') + (md === 'auto' ? ' (авто)' : '');
+    const seg = '<div class="seg" id="segFish" role="group" aria-label="Режим рыбалки">' + [['auto', 'Авто'], ['open', 'Лето'], ['ice', 'Зима']].map((x) => '<button type="button" data-v="' + x[0] + '" aria-pressed="' + (md === x[0]) + '">' + x[1] + '</button>').join('') + '</div>';
+    const modeTxt = (ice ? 'Зима, подлёдная' : 'Лето, открытая вода') + (md === 'auto' ? ' (авто)' : '');
     openModal('<div class="fhead" data-l="' + f.now.lvl + '">' + ringHtml(f.now.score) + '<div><h3>Клёв: ' + esc(f.now.label) + '</h3><p class="sub">' + f.now.score + ' из 100 · ' + esc(modeTxt) + '</p></div></div>' + seg +
       (f.now.warn ? '<p class="fwarn">' + ic('storm', 18, 'currentColor', 1.8) + '<span>' + esc(f.now.warn) + '</span></p>' : '') +
       '<div class="fparts">' + rows + '</div>' + best +
@@ -424,8 +437,26 @@
     $('#fOk').onclick = closeModal;
     $('#segFish').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { setFishMode(b.dataset.v); showFish(); }));
   }
+  function onSeasonChange() {
+    renderMarkers();
+    if (lv.classList.contains('open')) renderListItems();
+  }
+  let lastAutoCheck = 0;
+  async function refreshAutoSeason() {
+    try {
+      const c = map.getCenter();
+      const [res, hist] = await Promise.all([getWeather(c.lat, c.lng), getHistory(c.lat, c.lng).catch(() => null)]);
+      if (!res) return;
+      const next = fishCtx(res.data, hist).autoIce ? 'winter' : 'summer';
+      lsSet('fishmap.autoSeason', next);
+      lastAutoCheck = Date.now();
+      if (next !== S.autoSeason) { const before = curSeason(); S.autoSeason = next; if (curSeason() !== before) onSeasonChange(); }
+    } catch (e) { /* без данных остаётся прежний сезон */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastAutoCheck > 30 * 60 * 1000) refreshAutoSeason(); });
   function setFishMode(v) {
     S.fishMode = v; lsSet('fishmap.fishmode', v);
+    onSeasonChange();
     if (S.wxRes && sheet.classList.contains('open')) fillWeather(S.wxRes, S.wxHist);
     if (lv.classList.contains('open')) renderListItems();
     const sg = document.querySelector('#segFishMode');
@@ -624,7 +655,7 @@
   function descHtml(t) {
     return '<section class="desc-sec"><h3>Описание</h3><textarea id="descr" aria-label="Описание точки" placeholder="Как подойти, глубина, на что клюёт…" rows="4"' + (t.shared ? ' readonly' : '') + '>' + esc(t.note || '') + '</textarea></section>';
   }
-  const subText = (t, saved) => (saved ? (t.author ? 'Автор: ' + esc(t.author) : 'Сохранено') + ' · ' : '') + coordsText(t);
+  const subText = (t, saved) => (saved ? (t.author ? 'Автор: ' + esc(t.author) : 'Сохранено') + ' · ' + SEAS[seasonOf(t)] + ' · ' : '') + coordsText(t);
   function renderSheet(startState) {
     const t = curTarget();
     if (!t) { closeSheet(); return; }
@@ -754,20 +785,26 @@
     const n = allSpots().length + 1;
     openModal('<h3>Сохранить точку</h3><p class="sub">' + coordsText(p) + '</p>' +
       '<label for="fName">Название</label><input id="fName" class="input" maxlength="60" value="' + esc(presetName || 'Точка ' + n) + '" placeholder="Например: Bow River, мост">' +
+      '<label>Сезон</label><div class="seg" id="fSeason" role="group" aria-label="Сезон точки">' + ['summer', 'winter', 'both'].map((k) => '<button type="button" data-v="' + k + '" aria-pressed="' + (k === curSeason()) + '">' + SEAS[k] + '</button>').join('') + '</div>' +
       '<div class="row"><button class="btn btn-secondary" id="fCancel" type="button">Отмена</button><button class="btn btn-primary" id="fSave" type="button">Сохранить</button></div>');
     const inp = $('#fName'); inp.focus(); inp.select();
     $('#fCancel').onclick = closeModal;
+    let seasonSel = curSeason();
+    $('#fSeason').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      seasonSel = b.dataset.v;
+      $('#fSeason').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    }));
     let done = false;
     const go = () => {
       if (done) return;
       const name = inp.value.trim();
       if (!name) { inp.focus(); return; }
       done = true;
-      const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', author: S.me || '', owner: S.dev, created: Date.now(), updated: Date.now(), dirty: true };
+      const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', season: seasonSel, author: S.me || '', owner: S.dev, created: Date.now(), updated: Date.now(), dirty: true };
       S.spots.push(s); saveLocal(); scheduleSync(); closeModal();
       S.temp = null; setTempMarker(null);
       openSpot(s.id, 'half');
-      toast('Точка сохранена');
+      toast(inSeason(s) ? 'Точка сохранена' : 'Точка сохранена. Она видна в режиме «' + SEAS[seasonSel] + '»', inSeason(s) ? undefined : 4500);
     };
     $('#fSave').onclick = go;
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
@@ -778,6 +815,7 @@
     openModal('<h3>' + esc(t.name) + '</h3><div class="stack">' +
       (t.shared ? '<p class="sub">Общая точка из файла spots.json</p>' :
         '<button class="btn btn-secondary" id="mRen" type="button">' + ic('edit', 20) + 'Переименовать</button>' +
+        '<button class="btn btn-secondary" id="mSeas" type="button">' + ic(seasonOf(t) === 'winter' ? 'fishw' : 'fish', 20) + 'Сезон: ' + SEAS[seasonOf(t)] + '</button>' +
         (canDelete(t) ? '<button class="btn btn-danger" id="mDel" type="button">' + ic('trash', 20) + 'Удалить точку</button>' : '<p class="sub">Удалить точку может только её автор' + (t.author ? ': ' + esc(t.author) : '') + '.</p>')) +
       '<button class="btn btn-secondary" id="mCancel" type="button">Закрыть</button></div>');
     $('#mCancel').onclick = closeModal;
@@ -789,6 +827,17 @@
       $('#rCancel').onclick = closeModal;
       const go = () => { const v = inp.value.trim(); if (!v) return; const s = findSpot(t.id); s.name = v; touch(s); closeModal(); renderMarkers(); renderSheet(S.state); };
       $('#rSave').onclick = go; inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    };
+    $('#mSeas').onclick = () => {
+      openModal('<h3>Сезон точки</h3><p class="sub">Летние точки видны в режиме «Лето», зимние в режиме «Зима», точки «Оба сезона» видны всегда.</p><div class="stack">' +
+        ['summer', 'winter', 'both'].map((k) => '<button class="btn ' + (k === seasonOf(t) ? 'btn-primary' : 'btn-secondary') + '" type="button" data-v="' + k + '">' + SEAS[k] + '</button>').join('') +
+        '<button class="btn btn-secondary" id="sCancel" type="button">Отмена</button></div>');
+      $('#sCancel').onclick = closeModal;
+      mcard.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => {
+        const x = findSpot(t.id); if (!x) return;
+        x.season = b.dataset.v; touch(x); closeModal(); renderMarkers(); renderSheet(S.state);
+        if (!inSeason(x)) toast('Точка спрятана до режима «' + SEAS[x.season] + '»', 4500);
+      }));
     };
     if (!$('#mDel')) return;
     $('#mDel').onclick = () => {
@@ -825,26 +874,30 @@
   function closeList() { lv.classList.remove('open'); lv.setAttribute('aria-hidden', 'true'); document.body.classList.remove('list-open'); }
   function renderListItems() {
     lv.querySelectorAll('[data-f]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.f === S.filter)));
-    $('#lvCount').textContent = allSpots().length;
-    let arr = allSpots().slice();
+    const vis = seasonSpots(), hidden = allSpots().length - vis.length;
+    $('#lvCount').textContent = vis.length;
+    let arr = vis.slice();
     const q = S.q.trim().toLowerCase();
     if (q) arr = arr.filter((s) => s.name.toLowerCase().includes(q));
     if (S.filter === 'near' && S.loc) arr.sort((a, b) => distance(S.loc, a) - distance(S.loc, b));
     else if (S.filter === 'new') arr.sort((a, b) => (b.created || 0) - (a.created || 0));
     else arr.sort((a, b) => (a.created || 0) - (b.created || 0));
     const box = $('#lvList');
+    const winNow = curSeason() === 'winter';
+    const hideNote = hidden ? '<p class="lvhide">Скрыто точек другого сезона: ' + hidden + '. Сезон переключается в меню слоёв (Рыбалка).</p>' : '';
     if (!allSpots().length) {
       box.innerHTML = '<div class="empty">' + ic('fish', 44, 'currentColor', 1.5) + '<b>Пока нет точек</b>Тапните по карте, чтобы увидеть погоду и сохранить первое место.</div>';
       return;
     }
-    if (!arr.length) { box.innerHTML = '<div class="empty"><b>Ничего не найдено</b>Попробуйте другое название.</div>'; return; }
+    if (!vis.length) { box.innerHTML = '<div class="empty">' + ic(winNow ? 'fishw' : 'fish', 44, 'currentColor', 1.5) + '<b>В этом сезоне точек нет</b>Сохраните точку на карте или переключите сезон.</div>' + hideNote; return; }
+    if (!arr.length) { box.innerHTML = '<div class="empty"><b>Ничего не найдено</b>Попробуйте другое название.</div>' + hideNote; return; }
     box.innerHTML = arr.map((s) => {
       const dist = S.loc ? fmtDist(distance(S.loc, s)) + ' · ' : '';
       const date = s.created ? new Date(s.created).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
-      return '<button class="card" type="button" data-id="' + esc(s.id) + '"><span class="thumb">' + ic('fish', 30, 'currentColor', 1.6) + '</span>' +
+      return '<button class="card" type="button" data-id="' + esc(s.id) + '"><span class="thumb">' + ic(winNow ? 'fishw' : 'fish', 30, 'currentColor', 1.6) + '</span>' +
         '<span class="ct"><span class="n">' + esc(s.name) + '</span><span class="m">' + dist + ((s.author ? esc(s.author) + ' · ' : '') + (date ? (s.author ? '' : 'сохранена ') + esc(date) : 'общая точка')) + (nc(s.id) ? ' · ' + nc(s.id) + ' ' + plural(nc(s.id), 'отзыв', 'отзыва', 'отзывов') : '') + '</span>' +
         '<span class="w" data-w="' + esc(s.id) + '"></span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
-    }).join('');
+    }).join('') + hideNote;
     hydrateListThumbs(box, arr);
     box.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
       const s = findSpot(c.dataset.id); closeList(); openSpot(s.id, 'half');
@@ -882,7 +935,8 @@
     menu.innerHTML =
       '<h4>Слой карты</h4><div class="seg" id="segLayer"><button type="button" data-v="osm">Карта</button><button type="button" data-v="topo">Топо</button></div>' +
       '<h4>Тема</h4><div class="seg" id="segTheme"><button type="button" data-v="auto">Авто</button><button type="button" data-v="light">Светлая</button><button type="button" data-v="dark">Тёмная</button></div>' +
-      '<h4>Рыбалка</h4><div class="seg" id="segFishMode"><button type="button" data-v="auto">Авто</button><button type="button" data-v="open">Вода</button><button type="button" data-v="ice">Лёд</button></div>' +
+      '<h4>Рыбалка</h4><div class="seg" id="segFishMode"><button type="button" data-v="auto">Авто</button><button type="button" data-v="open">Лето</button><button type="button" data-v="ice">Зима</button></div>' +
+      '<p class="note">Лето и Зима показывают свои метки и свою формулу клёва. Авто переключается само, когда устанавливаются морозы.</p>' +
       '<h4>Группа</h4><div id="grp" class="grp"></div>' +
       '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Без интернета карта показывает те места, которые вы уже смотрели с интернетом. Откройте нужные озёра и реки по Wi-Fi заранее.</p>' +
       '<button class="linkbtn" id="bUpdate" type="button">Обновить приложение <span id="ver"></span></button>';
@@ -975,7 +1029,7 @@
         const snap = new Map(dirty.map((x) => [x.id, x.updated]));
         r = await sb('spots?on_conflict=id', {
           method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: dirty.map((x) => ({ id: x.id, name: x.name, lat: x.lat, lon: x.lon, note: x.note || '', author: x.author || '', author_id: x.owner === undefined ? S.dev : (x.owner || null), created_at: new Date(x.created || Date.now()).toISOString() }))
+          body: dirty.map((x) => ({ id: x.id, name: x.name, lat: x.lat, lon: x.lon, note: x.note || '', season: seasonOf(x), author: x.author || '', author_id: x.owner === undefined ? S.dev : (x.owner || null), created_at: new Date(x.created || Date.now()).toISOString() }))
         });
         if (!r.ok) throw new Error('push ' + r.status);
         dirty.forEach((x) => { if (x.owner === undefined) x.owner = S.dev; if (snap.get(x.id) === x.updated) delete x.dirty; });
@@ -989,7 +1043,7 @@
       rows.forEach((row) => {
         const l = local.get(row.id);
         if (l && l.dirty) return;
-        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', author: row.author || '', owner: row.author_id || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at) };
+        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', season: row.season || 'summer', author: row.author || '', owner: row.author_id || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at) };
         if (l) Object.assign(l, o); else { S.spots.push(o); added++; }
       });
       S.spots = S.spots.filter((x) => x.shared || x.dirty || remote.has(x.id));
@@ -1461,7 +1515,7 @@
     const mine = lq && !c ? allSpots().filter((x) => x.name.toLowerCase().includes(lq)).slice(0, 6) : (!lq ? allSpots().slice().sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 4) : []);
     if (mine.length) {
       rows.push('<div class="shead">' + (lq ? 'Ваши точки' : 'Недавние точки') + '</div>');
-      mine.forEach((x) => rows.push(row('sm', 'fish', x.name, (x.author ? x.author + ' · ' : '') + coordsText(x), 'data-act="spot" data-id="' + esc(x.id) + '"')));
+      mine.forEach((x) => rows.push(row('sm', 'fish', x.name, (x.author ? x.author + ' · ' : '') + coordsText(x) + (inSeason(x) ? '' : ' · ' + SEAS[seasonOf(x)]), 'data-act="spot" data-id="' + esc(x.id) + '"')));
     }
     if (q.length >= 2 && !c) rows.push(row('sw', 'search', 'Искать «' + q + '» на карте', 'Озёра, реки, города, парки. Нужен интернет', 'data-act="web"'));
     if (sBusy) rows.push('<div class="smsg">Ищу…</div>');
@@ -1582,6 +1636,7 @@
     if (S.spots.length > 1) map.fitBounds(L.latLngBounds(S.spots.map((s) => [s.lat, s.lon])).pad(0.25));
     else if (S.spots.length === 1) map.setView([S.spots[0].lat, S.spots[0].lon], 12);
     checkJoin(); checkHash();
+    refreshAutoSeason();
     window.addEventListener('hashchange', () => { checkJoin(); checkHash(); });
     if (S.code) syncNow();
     if ('serviceWorker' in navigator) {
