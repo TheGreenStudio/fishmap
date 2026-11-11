@@ -88,6 +88,17 @@ async function getText(url, fixture) {
 
 // ---------- новости ----------
 
+// Одну и ту же историю пересказывают несколько изданий. Считаем заголовки «про одно»,
+// если у них три и больше общих слов из четырёх и более букв.
+const words = (s) => new Set(norm(s).split(' ').filter((w) => w.length >= 4));
+function sameStory(a, b) {
+  const wa = words(a);
+  let shared = 0;
+  for (const w of words(b)) if (wa.has(w)) shared++;
+  return shared >= 3;
+}
+const alreadySent = (title, list) => list.some((t) => t === norm(title) || sameStory(t, title));
+
 const decode = (s) => s
   .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
@@ -128,7 +139,7 @@ async function pickNews(section, state, used) {
       && MUST.test(i.title) && STRONG.test(i.title)
       && !BLOCK.test(i.title) && !TRAVEL.test(i.title)
       && section.region.test(`${i.title} ${i.source}`)
-      && !state.sent.includes(norm(i.title)) && !used.has(norm(i.title)))
+      && !alreadySent(i.title, state.sent) && !alreadySent(i.title, [...used]))
     .sort((a, b) => b.date - a.date);
   console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
   // Для настройки фильтров: в пробном запуске показываем, из чего выбирали.
