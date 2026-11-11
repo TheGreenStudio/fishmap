@@ -13,7 +13,9 @@
 //   FIXTURE_DIR   для локальных тестов: брать данные из файлов вместо сети
 
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { fishCtx, fishDay } from './fishscore.mjs';
+import { norm, SECTIONS, MUST, STRONG, TRAVEL, BLOCK, sameStory, alreadySent, cleanSummary } from './filters.mjs';
 
 const TZ = 'America/Edmonton';
 const LAT = 51.0447;
@@ -25,34 +27,11 @@ const SAVE = E.SAVE_STATE === '1';
 const STATE_FILE = E.STATE_FILE || 'news-bot/state.json';
 const FIXTURES = E.FIXTURE_DIR || '';
 
-// Порядок разделов в сообщении: сначала то, что ближе к читателю.
-// Запросы намеренно простые: Google News на длинные запросы с OR отвечает мусором
-// (проверено вживую 2026-11-11). Результаты нескольких запросов объединяются.
-const SECTIONS = [
-  { title: 'Альберта', fixture: 'alberta.xml', days: 21,
-    queries: ['Alberta fishing', 'Alberta anglers', 'Calgary fishing', 'Alberta ice fishing'],
-    // Новость должна быть про Альберту (в заголовке или названии источника).
-    region: /alberta|calgary|edmonton|red deer|lethbridge|medicine hat|bow river|stettler|grande prairie|peace river|banff|jasper|canmore|cochrane|airdrie|okotoks|mcmurray|slave lake|athabasca|cold lake|bonnyville|wetaskiwin|camrose|drumheller|lloydminster|brooks|high river|rocky mountain house|sylvan|pigeon lake|lac la biche/i },
-  { title: 'Канада', fixture: 'canada.xml', days: 14,
-    queries: ['Canada fishing anglers', 'recreational fishing Canada', 'ice fishing Canada', 'Fisheries and Oceans Canada anglers'],
-    // Только канадские новости: американские местные газеты с запросом «Canada» тоже находятся.
-    region: /canad|b\.c\.|\bbc\b|ontario|manitoba|saskatchewan|quebec|nova scotia|new brunswick|newfoundland|yukon|nunavut|northwest territories|\bdfo\b|fisheries and oceans|cbc|ctv|global news|citynews|narcity|daily hive|castanet|national post|toronto|vancouver|winnipeg|ottawa|kelowna|kamloops|victoria|\.ca\b/i },
-];
-
-// Нужны именно новости про любительскую рыбалку: промысел и прочее отсекаем.
-// Слова «fish/angl» нет в части заголовков (например «Prussian carp», «Big Jack Classic»), поэтому список шире.
-const MUST = /fish|angl|trout|walleye|pike|carp|sturgeon|whitefish|perch|grayling|burbot|bass\b|salmon|steelhead|big jack|derby|stocking|lake trout|tackle/i;
-// Статья должна быть про рыбалку по существу, а не просто упоминать воду или еду.
-const STRONG = /angler|angling|ice fishing|fishing (ban|closure|rules?|regulations?|licen[cs]e|season|derby|tournament|report|limits?)|\bdfo\b|fisheries and oceans|stocking|derby|big jack|invasive|carp|walleye|trout|\bpike\b|sturgeon|whitefish|burbot|grayling|steelhead|conservation officer|fined|fines\b/i;
-// Путевые заметки и подборки не нужны.
-const TRAVEL = /village|lighthouse|best places|top \d+|things to do|travel|vacation|resort|getaway|charming|bucket list|destinations?|itinerary|road trip|hidden gem|must[- ]visit|guide to|hotels?\b/i;
-const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b|dead|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|shares|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|first nation|pipeline|hydro|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
 
 // ---------- вспомогательное ----------
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-const norm = (s) => s.toLowerCase().replace(/[^a-z0-9а-я]+/g, ' ').trim();
 
 function localParts(d) {
   const p = Object.fromEntries(
@@ -90,16 +69,6 @@ async function getText(url, fixture, headers = {}) {
 
 // ---------- новости ----------
 
-// Одну и ту же историю пересказывают несколько изданий. Считаем заголовки «про одно»,
-// если у них три и больше общих слов из четырёх и более букв.
-const words = (s) => new Set(norm(s).split(' ').filter((w) => w.length >= 4));
-function sameStory(a, b) {
-  const wa = words(a);
-  let shared = 0;
-  for (const w of words(b)) if (wa.has(w)) shared++;
-  return shared >= 3;
-}
-const alreadySent = (title, list) => list.some((t) => t === norm(title) || sameStory(t, title));
 
 const decode = (s) => s
   .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
@@ -160,12 +129,6 @@ async function pickNews(section, state, used) {
 
 // ---------- краткое описание статьи ----------
 
-const entities = (s) => s
-  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-  .replace(/&(rsquo|lsquo|#8217);/g, "'").replace(/&(ldquo|rdquo);/g, '"')
-  .replace(/&hellip;/g, '…').replace(/&[nm]dash;/g, '-').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 async function tryFetch(url, init = {}) {
   const r = await fetch(url, {
@@ -210,27 +173,6 @@ async function resolveGoogleLink(link) {
   return url;
 }
 
-function cleanSummary(raw, title) {
-  let s = entities(entities(raw)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  // Издание само обрезало описание («… [...]»): оставляем только целые предложения.
-  const cutMark = /\s*\[?\s*(…|\.{3})\s*\]?\s*$/;
-  if (cutMark.test(s)) {
-    s = s.replace(cutMark, '');
-    const end = Math.max(s.lastIndexOf('. '), s.lastIndexOf('! '), s.lastIndexOf('? '));
-    if (end > 40) s = s.slice(0, end + 1);
-    else if (!/[.!?]$/.test(s)) return '';
-  }
-  if (s.length < 50) return '';
-  if (/cookie|subscribe|sign in|log in|javascript|enable|all rights reserved/i.test(s)) return '';
-  // Описание, которое просто повторяет заголовок, ничего не добавляет.
-  if (norm(s).startsWith(norm(title).slice(0, 40)) && s.length < title.length + 40) return '';
-  if (s.length > 260) {
-    const cut = s.slice(0, 260);
-    const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
-    s = end > 100 ? cut.slice(0, end + 1) : cut.slice(0, cut.lastIndexOf(' ')) + '…';
-  }
-  return s;
-}
 
 async function fetchSummary(item) {
   if (FIXTURES) return '';
@@ -462,4 +404,7 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e.message); process.exit(1); });
+// Запуск только как скрипт: при импорте (тесты) ничего не выполняется.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => { console.error(e.message); process.exit(1); });
+}
