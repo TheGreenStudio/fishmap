@@ -40,6 +40,10 @@ const SECTIONS = [
 // Нужны именно новости про любительскую рыбалку: промысел и прочее отсекаем.
 // Слова «fish/angl» нет в части заголовков (например «Prussian carp», «Big Jack Classic»), поэтому список шире.
 const MUST = /fish|angl|trout|walleye|pike|carp|sturgeon|whitefish|perch|grayling|burbot|bass\b|salmon|steelhead|big jack|derby|stocking|lake trout|tackle/i;
+// Статья должна быть про рыбалку по существу, а не просто упоминать воду или еду.
+const STRONG = /angler|angling|ice fishing|fishing (ban|closure|rules?|regulations?|licen[cs]e|season|derby|tournament|report|limits?)|\bdfo\b|fisheries and oceans|stocking|derby|big jack|invasive|carp|walleye|trout|\bpike\b|sturgeon|whitefish|burbot|grayling|steelhead|conservation officer|fined|fines\b/i;
+// Путевые заметки и подборки не нужны.
+const TRAVEL = /village|lighthouse|best places|top \d+|things to do|travel|vacation|resort|getaway|charming|bucket list|destinations?|itinerary|road trip|hidden gem|must[- ]visit|guide to|hotels?\b/i;
 const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b|dead|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|shares|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|first nation|pipeline|hydro|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
 
 // ---------- вспомогательное ----------
@@ -98,8 +102,10 @@ function parseRss(xml) {
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((m) => {
     const x = m[1];
     let title = tag(x, 'title');
-    const source = tag(x, 'source');
-    if (source && title.endsWith(` - ${source}`)) title = title.slice(0, -(source.length + 3));
+    const rawSource = tag(x, 'source');
+    if (rawSource && title.endsWith(` - ${rawSource}`)) title = title.slice(0, -(rawSource.length + 3));
+    // У части источников вместо названия приходит адрес сайта: оставляем только домен.
+    const source = /^https?:\/\//i.test(rawSource) ? rawSource.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/.*$/, '') : rawSource;
     return { title, source, link: tag(x, 'link'), date: new Date(tag(x, 'pubDate')) };
   }).filter((i) => i.title && i.link && !Number.isNaN(i.date.getTime()));
 }
@@ -119,11 +125,14 @@ async function pickNews(section, state, used) {
   const cutoff = Date.now() - section.days * 864e5;
   const found = [...all.values()]
     .filter((i) => i.date.getTime() >= cutoff
-      && MUST.test(i.title) && !BLOCK.test(i.title)
+      && MUST.test(i.title) && STRONG.test(i.title)
+      && !BLOCK.test(i.title) && !TRAVEL.test(i.title)
       && section.region.test(`${i.title} ${i.source}`)
       && !state.sent.includes(norm(i.title)) && !used.has(norm(i.title)))
     .sort((a, b) => b.date - a.date);
   console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
+  // Для настройки фильтров: в пробном запуске показываем, из чего выбирали.
+  if (DRY) for (const f of found.slice(0, 6)) console.log(`   - ${f.date.toISOString().slice(0, 10)} | ${f.source} | ${f.title}`);
   return found[0] || null;
 }
 
