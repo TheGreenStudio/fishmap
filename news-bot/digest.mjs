@@ -126,7 +126,7 @@ export async function pickNews(section, state, used) {
       && MUST.test(i.title) && STRONG.test(i.title)
       && !BLOCK.test(i.title) && !TRAVEL.test(i.title)
       && section.region.test(`${i.title} ${i.source}`)
-      && !alreadySent(i.title, state.sent) && !alreadySent(i.title, [...used]))
+      && !alreadySent(i.title, state.sent.map((x) => x.t)) && !alreadySent(i.title, [...used]))
     .sort((a, b) => b.date - a.date);
   console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
   // Для настройки фильтров: в пробном запуске показываем, из чего выбирали.
@@ -396,14 +396,49 @@ export async function sendTelegram(text) {
   }
 }
 
+// ---------- состояние ----------
+
+const daysApart = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
+const SENT_KEEP_DAYS = 30;
+
+// Состояние хранится в кэше GitHub Actions. Записи об отправленных новостях живут 30 дней,
+// иначе со временем «похожие» старые заголовки начинали бы отсекать настоящие новые.
+export function normalizeState(raw, today) {
+  const st = { lastSentDate: '', sent: [] };
+  if (!raw || typeof raw !== 'object') return st;
+  st.lastSentDate = typeof raw.lastSentDate === 'string' ? raw.lastSentDate : '';
+  const list = Array.isArray(raw.sent) ? raw.sent : [];
+  st.sent = list
+    .map((x) => (typeof x === 'string' ? { t: x, d: today } : x))
+    .filter((x) => x && typeof x.t === 'string' && typeof x.d === 'string' && daysApart(x.d, today) <= SENT_KEEP_DAYS);
+  return st;
+}
+
+// Проверка сохранения кэша без отправки сообщения: ручной запуск с галочкой selftest.
+function selftest() {
+  const f = E.SELFTEST_FILE || 'news-bot/selftest.json';
+  let prev = null;
+  try { prev = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { /* первого запуска ещё не было */ }
+  console.log(prev ? `Самотест: кэш восстановлен (запись №${prev.n} от ${prev.at})` : 'Самотест: кэша нет (первый запуск самотеста)');
+  fs.writeFileSync(f, JSON.stringify({ n: ((prev && prev.n) || 0) + 1, at: new Date().toISOString() }));
+  if (E.GITHUB_OUTPUT) fs.appendFileSync(E.GITHUB_OUTPUT, 'selftest=true\n');
+}
+
 // ---------- главное ----------
 
 async function main() {
   const now = new Date();
   const { date: today, minutes } = localParts(now);
 
-  let state = { lastSentDate: '', sent: [] };
-  try { state = { ...state, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch { /* первый запуск */ }
+  if (E.SELFTEST === '1') { selftest(); return; }
+  console.log(`Время в Calgary: ${today} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} (tz ${process.versions.tz || 'неизвестно'}, Node ${process.version})`);
+
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* первого запуска ещё не было или кэш потерян */ }
+  const state = normalizeState(raw, today);
+  console.log(raw
+    ? `Состояние восстановлено: последняя отправка ${state.lastSentDate || 'нет'}, записей о новостях ${state.sent.length}`
+    : 'Сохранённого состояния нет (первый запуск или кэш потерян).');
 
   if (!FORCE) {
     if (state.lastSentDate === today) { console.log('Сегодня уже отправляли, выходим.'); return; }
@@ -447,7 +482,7 @@ async function main() {
 
   if (SAVE) {
     state.lastSentDate = today;
-    state.sent = [...picked, ...state.sent].slice(0, 100);
+    state.sent = [...picked.map((t) => ({ t, d: today })), ...state.sent].slice(0, 100);
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 1));
     if (E.GITHUB_OUTPUT) fs.appendFileSync(E.GITHUB_OUTPUT, 'saved=true\n');
   }

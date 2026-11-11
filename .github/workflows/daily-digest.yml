@@ -18,6 +18,10 @@ on:
         description: 'Запомнить отправленные новости и дату (для настоящей отправки включать не нужно)'
         type: boolean
         default: false
+      selftest:
+        description: 'Проверить только сохранение и чтение кэша, сообщение не отправляется'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -40,6 +44,13 @@ jobs:
           path: news-bot/state.json
           key: digest-state-none
           restore-keys: digest-state-
+      - name: Restore selftest cache
+        if: inputs.selftest
+        uses: actions/cache/restore@v4
+        with:
+          path: news-bot/selftest.json
+          key: digest-selftest-none
+          restore-keys: digest-selftest-
       - name: Build and send digest
         id: digest
         env:
@@ -51,6 +62,7 @@ jobs:
           FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
           SAVE_STATE: ${{ (github.event_name == 'schedule' || inputs.save_state) && '1' || '0' }}
+          SELFTEST: ${{ github.event_name == 'workflow_dispatch' && inputs.selftest && '1' || '0' }}
         run: node news-bot/digest.mjs
       - name: Save state
         if: always() && steps.digest.outputs.saved == 'true'
@@ -58,3 +70,9 @@ jobs:
         with:
           path: news-bot/state.json
           key: digest-state-${{ github.run_id }}
+      - name: Save selftest cache
+        if: always() && steps.digest.outputs.selftest == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: news-bot/selftest.json
+          key: digest-selftest-${{ github.run_id }}
