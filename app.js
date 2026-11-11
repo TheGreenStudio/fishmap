@@ -491,10 +491,10 @@
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
-      '<div id="extra"><div id="wxStats" class="stats"></div><div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? photosHtml(t) + descHtml(t) : '') + '</div>' +
+      '<div id="extra"><div id="wxStats" class="stats"></div>' + photosHtml(t, saved) + '<div id="wxForecast"></div><div id="wxSpark"></div>' + (saved ? descHtml(t) : '') + '</div>' +
       '<div id="actions" class="actions">' +
       (saved
-        ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>'
+        ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>' + (t.shared ? '' : '<button class="icon-btn sq" id="bPhoto" type="button" aria-label="Добавить фото">' + ic('camera', 22) + '</button>')
         : '<button class="btn btn-primary" id="bSave" type="button">' + ic('bookmark', 20) + 'Сохранить точку</button><a class="icon-btn sq" href="' + routeUrl(t) + '" target="_blank" rel="noopener" aria-label="Маршрут">' + ic('nav', 22) + '</a>') +
       '</div>';
     $('#bCollapse').addEventListener('click', () => { applyState('mini'); setTimeout(focusTarget, 60); });
@@ -502,6 +502,11 @@
     $('#bClose').addEventListener('click', closeSheet);
     if (saved) {
       renderPhotoStrip();
+      const bp = $('#bPhoto');
+      if (bp) bp.addEventListener('click', () => {
+        if (!S.code) { toast('Сначала войдите в группу по ссылке из Telegram'); return; }
+        const f = $('#phFile'); if (f) f.click();
+      });
       $('#bMore').addEventListener('click', () => moreMenu(t));
       const ta = $('#descr');
       let tm;
@@ -1042,7 +1047,8 @@
   const photosOf = (id) => S.pending.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, pending: true, thumbUrl: x.thumbUrl, author: x.author, created: x.created }))
     .concat(S.photos.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, path: x.path, author: x.author, created: Date.parse(x.created_at) })))
     .sort((a, b) => b.created - a.created);
-  const photosHtml = (t) => t.shared ? '' : '<section class="ph-sec"><h3>Фото</h3><div id="phStrip" class="pstrip"></div></section>';
+  const photosHtml = (t, saved) => saved ? (t.shared ? '' : '<section class="ph-sec"><h3>Фото</h3><div id="phStrip" class="pstrip"></div></section>')
+    : '<section class="ph-sec"><h3>Фото</h3><p class="pnote">Сохраните точку, и здесь появится кнопка для добавления фото.</p></section>';
   function renderPhotoStrip() {
     const box = $('#phStrip'), t = S.sel && findSpot(S.sel);
     if (!box || !t) return;
