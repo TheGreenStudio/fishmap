@@ -17,6 +17,7 @@
     locate: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22"/>',
     layers: '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 12.5l9 5 9-5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    pin: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0113 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.4"/>',
     chat: '<path d="M21 11.5a8 8 0 01-11.6 7.1L4 20l1.4-4.6A8 8 0 1121 11.5z"/>',
     camera: '<path d="M21 18a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h3l1.6-2.4h4.8L16 7h3a2 2 0 012 2z"/><circle cx="12" cy="13" r="3.8"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -416,7 +417,7 @@
 
   const curTarget = () => {
     if (S.sel) { const s = findSpot(S.sel); if (s) return Object.assign({ kind: 'spot' }, s); }
-    if (S.temp) return { kind: 'temp', lat: S.temp.lat, lon: S.temp.lon };
+    if (S.temp) return { kind: 'temp', lat: S.temp.lat, lon: S.temp.lon, label: S.temp.label || '' };
     return null;
   };
   const maxFull = () => window.innerHeight - 64 - (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-t')) || 0);
@@ -489,11 +490,11 @@
     sheet.dataset.kind = t.kind;
     sheet.classList.add('open');
     document.body.classList.add('sheet-open');
-    const ttl = esc(saved ? t.name : 'Новая точка');
+    const ttl = esc(saved ? t.name : (t.label || 'Новая точка'));
     body.innerHTML =
       '<div id="miniRow" class="mini"><button class="mini-main" id="bExpand" type="button" aria-label="Развернуть панель"><span id="miniWx" class="mini-wx"></span><span class="mini-title">' + ttl + '</span><span id="miniFish"></span>' + ic('chev_r', 20, 'currentColor', 2, 'transform:rotate(-90deg);color:var(--muted)') + '</button>' +
       '<button class="icon-btn" id="bClose" type="button" aria-label="Закрыть">' + ic('x', 20, 'currentColor', 2) + '</button></div>' +
-      '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : 'Новая точка') + '</h2><div class="sub">' + subText(t, saved) + '</div></div>' +
+      '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : (t.label || 'Новая точка')) + '</h2><div class="sub">' + subText(t, saved) + '</div></div>' +
       '<div class="hbtns">' + (saved && !t.shared ? '<button class="icon-btn cbtn" id="bComm" type="button" aria-label="Отзывы">' + ic('chat', 22) + '<span class="bdg" id="bdg"></span></button>' : '') + (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') +
       '<button class="icon-btn" id="bCollapse" type="button" aria-label="Свернуть погоду">' + ic('chev_r', 22, 'currentColor', 2, 'transform:rotate(90deg)') + '</button></div></div>' +
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
@@ -526,7 +527,7 @@
       let tm;
       ta.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { const s = findSpot(t.id); if (s && !s.shared) { s.note = ta.value; touch(s); } }, 400); });
     } else {
-      $('#bSave').addEventListener('click', () => saveDialog({ lat: t.lat, lon: t.lon }));
+      $('#bSave').addEventListener('click', () => saveDialog({ lat: t.lat, lon: t.lon }, t.label));
     }
     S.state = startState || S.state;
     measure();
@@ -1273,6 +1274,135 @@
       .map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author || '', owner: x.author_id || '', body: x.body, created: Date.parse(x.created_at) }));
     S.comments = rows.concat(S.comments.filter((c) => c.dirty && ids.has(c.spot_id))); saveComments();
   }
+
+  /* ---------- поиск: координаты, свои точки, названия (OpenStreetMap Nominatim, бесплатно) ---------- */
+  function parseCoords(q) {
+    let s = String(q || '').trim().toLowerCase();
+    if (!s) return null;
+    if (/https?:|maps/.test(s)) {
+      const g = s.match(/(-?\d{1,3}\.\d+)\s*[,;]\s*(-?\d{1,3}\.\d+)/);
+      return g ? checkLL(+g[1], +g[2], true) : null;
+    }
+    s = s.replace(/[−–—]/g, '-').replace(/[′’‘`´]/g, "'").replace(/[″“”]/g, '"').replace(/[°'"]/g, ' ');
+    if (!/\./.test(s)) s = s.replace(/(\d),(\d)/g, '$1.$2');
+    else if (/;/.test(s)) s = s.replace(/(\d),(\d)/g, '$1.$2');
+    s = s.replace(/(\d)([a-zа-я])/g, '$1 $2').replace(/([a-zа-я])(\d)/g, '$1 $2');
+    const toks = s.split(/[\s;,]+/).filter(Boolean);
+    if (!toks.length) return null;
+    const isN = (t) => /^-?\d+(\.\d+)?$/.test(t), isH = (t) => /^[nsewсювз]$/.test(t);
+    if (!toks.every((t) => isN(t) || isH(t))) return null;
+    const hasH = toks.some(isH);
+    if (!hasH) {
+      const v = toks.map(Number);
+      if (v.length === 2) return checkLL(v[0], v[1], true);
+      const dms = (a) => (a[0] < 0 || Object.is(a[0], -0) ? -1 : 1) * (Math.abs(a[0]) + (a[1] || 0) / 60 + (a[2] || 0) / 3600);
+      if (v.length === 4 && v[1] < 60 && v[3] < 60) return checkLL(dms(v.slice(0, 2)), dms(v.slice(2)), false);
+      if (v.length === 6 && v[1] < 60 && v[2] < 60 && v[4] < 60 && v[5] < 60) return checkLL(dms(v.slice(0, 3)), dms(v.slice(3)), false);
+      return null;
+    }
+    const prefix = isH(toks[0]), comps = [];
+    let cur = { n: [], h: null };
+    toks.forEach((t) => {
+      if (isH(t)) {
+        if (prefix) { if (cur.n.length) { comps.push(cur); cur = { n: [], h: null }; } cur.h = t; }
+        else { cur.h = t; comps.push(cur); cur = { n: [], h: null }; }
+      } else cur.n.push(Math.abs(+t));
+    });
+    if (cur.n.length || cur.h) comps.push(cur);
+    if (comps.length !== 2 || comps.some((c) => !c.h || !c.n.length || c.n.length > 3 || (c.n[1] || 0) >= 60 || (c.n[2] || 0) >= 60)) return null;
+    let lat = null, lon = null;
+    comps.forEach((c) => {
+      const v = c.n[0] + (c.n[1] || 0) / 60 + (c.n[2] || 0) / 3600;
+      if ('nsсю'.includes(c.h)) lat = c.h === 's' || c.h === 'ю' ? -v : v; else lon = c.h === 'w' || c.h === 'з' ? -v : v;
+    });
+    return lat == null || lon == null ? null : checkLL(lat, lon, false);
+  }
+  function checkLL(a, b, allowSwap) {
+    if (!isFinite(a) || !isFinite(b)) return null;
+    if (allowSwap && Math.abs(a) > 90 && Math.abs(b) <= 90) { const t = a; a = b; b = t; }
+    return Math.abs(a) <= 90 && Math.abs(b) <= 180 ? { lat: a, lon: b } : null;
+  }
+
+  const sPanel = $('#searchPanel'), sInput = $('#sInput'), sList = $('#sList');
+  let sWeb = null, sBusy = false, sLastReq = 0, sSeq = 0;   // sWeb: результаты поиска по названию
+  const openSearch = () => { sPanel.hidden = false; $('#bSearch').classList.add('on'); sWeb = null; sInput.value = ''; renderSearch(); setTimeout(() => sInput.focus(), 30); };
+  const closeSearch = () => { sPanel.hidden = true; $('#bSearch').classList.remove('on'); sInput.blur(); sSeq++; };
+  const placeLabel = (r) => {
+    const parts = String(r.display_name || '').split(',').map((x) => x.trim()).filter(Boolean);
+    return { title: r.name || parts[0] || 'Место', sub: parts.slice(r.name ? 0 : 1).filter((x) => x !== r.name).slice(0, 3).join(', ') };
+  };
+  function goTo(lat, lon, label, zoom) {
+    closeSearch();
+    const dup = allSpots().find((x) => Math.abs(x.lat - lat) < 0.0001 && Math.abs(x.lon - lon) < 0.0001);
+    if (dup) { openSpot(dup.id, 'half'); toast('Это ваша сохранённая точка'); return; }
+    map.setView([lat, lon], zoom || 14, { animate: false });
+    openTemp(L.latLng(lat, lon));
+    if (label) { S.temp.label = String(label).slice(0, 60); renderSheet('peek'); }
+  }
+  function renderSearch(msg) {
+    const q = sInput.value.trim(), rows = [];
+    const row = (cls, icon, title, sub, attr) => '<button type="button" class="sres ' + cls + '" ' + attr + '><span class="si">' + ic(icon, 20, 'currentColor', 1.8) + '</span><span class="st"><b>' + esc(title) + '</b>' + (sub ? '<i>' + esc(sub) + '</i>' : '') + '</span></button>';
+    const c = parseCoords(q);
+    if (c) rows.push(row('sc', 'locate', 'Перейти к координатам', fmtC(c.lat) + ', ' + fmtC(c.lon), 'data-act="coord"'));
+    const lq = q.toLowerCase();
+    const mine = lq && !c ? allSpots().filter((x) => x.name.toLowerCase().includes(lq)).slice(0, 6) : (!lq ? allSpots().slice().sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 4) : []);
+    if (mine.length) {
+      rows.push('<div class="shead">' + (lq ? 'Ваши точки' : 'Недавние точки') + '</div>');
+      mine.forEach((x) => rows.push(row('sm', 'fish', x.name, (x.author ? x.author + ' · ' : '') + coordsText(x), 'data-act="spot" data-id="' + esc(x.id) + '"')));
+    }
+    if (q.length >= 2 && !c) rows.push(row('sw', 'search', 'Искать «' + q + '» на карте', 'Озёра, реки, города, парки. Нужен интернет', 'data-act="web"'));
+    if (sBusy) rows.push('<div class="smsg">Ищу…</div>');
+    if (sWeb) {
+      rows.push('<div class="shead">Найдено на карте</div>');
+      if (!sWeb.length) rows.push('<div class="smsg">Ничего не найдено. Попробуйте другое написание или латиницу.</div>');
+      sWeb.forEach((r, i) => { const l = placeLabel(r); rows.push(row('sp', 'pin', l.title, l.sub, 'data-act="place" data-i="' + i + '"')); });
+    }
+    if (msg) rows.push('<div class="smsg warn">' + esc(msg) + '</div>');
+    if (!rows.length) rows.push('<div class="smsg">Введите название места или координаты, например 51.0447, -114.0719</div>');
+    sList.innerHTML = rows.join('');
+  }
+  async function webSearch() {
+    const q = sInput.value.trim();
+    if (q.length < 2) return;
+    if (!navigator.onLine) { renderSearch('Нет интернета: поиск по названию недоступен. Координаты и ваши точки работают.'); return; }
+    const my = ++sSeq; sBusy = true; sWeb = null; renderSearch();
+    const wait = sLastReq + 1100 - Date.now();           // правило сервиса: не чаще 1 запроса в секунду
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    if (my !== sSeq) return;
+    sLastReq = Date.now();
+    const b = map.getBounds();
+    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&accept-language=ru,en&q=' + encodeURIComponent(q) +
+      '&viewbox=' + [b.getWest(), b.getNorth(), b.getEast(), b.getSouth()].map((x) => x.toFixed(4)).join(',');
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const r = await fetch(url, { signal: ctl.signal, headers: { Accept: 'application/json' } });
+      if (!r.ok) throw new Error('nominatim ' + r.status);
+      const data = await r.json();
+      if (my !== sSeq) return;
+      sBusy = false; sWeb = data.filter((x) => isFinite(+x.lat) && isFinite(+x.lon)); renderSearch();
+    } catch (e) {
+      if (my !== sSeq) return;
+      sBusy = false; sWeb = null; renderSearch('Не удалось выполнить поиск. Проверьте интернет и попробуйте ещё раз.');
+    } finally { clearTimeout(to); }
+  }
+  const zoomFor = (r) => (/^(city|town|administrative|state|country|county)$/.test(r.type) || r.category === 'boundary' ? 11 : r.category === 'natural' || r.category === 'waterway' ? 13 : r.category === 'place' ? 12 : 14);
+  sList.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const a = b.dataset.act;
+    if (a === 'coord') { const c = parseCoords(sInput.value); if (c) goTo(c.lat, c.lon, '', 14); }
+    else if (a === 'spot') { closeSearch(); openSpot(b.dataset.id, 'half'); }
+    else if (a === 'web') webSearch();
+    else if (a === 'place' && sWeb) { const r = sWeb[+b.dataset.i]; if (r) goTo(+r.lat, +r.lon, placeLabel(r).title, zoomFor(r)); }
+  });
+  $('#sForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const c = parseCoords(sInput.value);
+    if (c) goTo(c.lat, c.lon, '', 14); else webSearch();
+  });
+  sInput.addEventListener('input', () => { sSeq++; sBusy = false; sWeb = null; renderSearch(); });
+  $('#sClose').addEventListener('click', closeSearch);
+  $('#bSearch').addEventListener('click', () => (sPanel.hidden ? openSearch() : closeSearch()));
+  sPanel.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
 
   /* ---------- deep link: #p=lat,lon,name ---------- */
   function checkHash() {

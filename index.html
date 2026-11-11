@@ -22,8 +22,18 @@
     <span data-ic="list" data-size="22"></span><span>Точки</span><span id="count" class="badge">0</span>
   </button>
   <button id="bLayers" class="fab fab-layers" type="button" aria-label="Слои и настройки"><span data-ic="layers"></span></button>
+  <button id="bSearch" class="fab fab-search" type="button" aria-label="Поиск по карте"><span data-ic="search"></span></button>
   <button id="bLocate" class="fab fab-locate" type="button" aria-label="Где я"><span data-ic="locate"></span></button>
 </div>
+
+<section id="searchPanel" class="spanel" hidden aria-label="Поиск">
+  <form id="sForm" class="srow" autocomplete="off">
+    <span data-ic="search" data-size="20"></span>
+    <input id="sInput" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Название или координаты" aria-label="Поиск по карте">
+    <button id="sClose" class="icon-btn" type="button" aria-label="Закрыть поиск"><span data-ic="x" data-size="20" data-sw="2"></span></button>
+  </form>
+  <div id="sList" class="slist"></div>
+</section>
 
 <div id="layerMenu" class="menu" hidden></div>
 <div id="hint" class="hint"><span data-ic="plus" data-size="18" data-sw="2.2"></span><span>Тапните по карте, чтобы увидеть погоду и сохранить точку</span></div>
