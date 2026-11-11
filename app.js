@@ -6,7 +6,8 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
-  const uid = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); });
+  const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
   const rnd = Math.round;
   const APP_URL = location.origin + location.pathname;
@@ -54,19 +55,22 @@
   const S = {
     spots: [], shared: [], sel: null, temp: null, state: 'peek', loc: null,
     theme: lsGet('fishmap.theme', 'auto'), layer: lsGet('fishmap.layer', 'osm'),
-    filter: 'all', q: '', wxKey: ''
+    filter: 'all', q: '', wxKey: '',
+    code: lsGet('fishmap.code', ''), me: lsGet('fishmap.me', ''), tomb: lsGet('fishmap.v3.tomb', []),
+    sync: { state: 'off', t: lsGet('fishmap.syncT', 0) }
   };
-  const KEY = 'fishmap.v2.spots';
+  const KEY = 'fishmap.v3.spots';
   function loadLocal() {
     let arr = lsGet(KEY, null);
     if (!arr) {
-      const old = lsGet('fishmap.local', []);
-      arr = old.map((s) => ({ id: s.id || uid(), name: s.name, lat: s.lat, lon: s.lon, note: s.note || '', created: Date.now() }));
+      const old = lsGet('fishmap.v2.spots', null) || lsGet('fishmap.local', []);
+      arr = old.map((s) => ({ id: isUuid(s.id) ? s.id : uid(), name: s.name, lat: s.lat, lon: s.lon, note: s.note || '', author: '', created: s.created || Date.now(), updated: Date.now(), dirty: true }));
       if (arr.length) lsSet(KEY, arr);
     }
     return arr || [];
   }
-  const saveLocal = () => lsSet(KEY, S.spots.filter((s) => !s.shared));
+  const saveLocal = () => { lsSet(KEY, S.spots.filter((s) => !s.shared)); lsSet('fishmap.v3.tomb', S.tomb); };
+  const touch = (s) => { s.dirty = true; s.updated = Date.now(); saveLocal(); scheduleSync(); };
   const allSpots = () => S.spots;
   const findSpot = (id) => S.spots.find((s) => s.id === id);
 
@@ -455,6 +459,7 @@
   function descHtml(t) {
     return '<section class="desc-sec"><h3>Описание</h3><textarea id="descr" aria-label="Описание точки" placeholder="Как подойти, глубина, на что клюёт…" rows="4"' + (t.shared ? ' readonly' : '') + '>' + esc(t.note || '') + '</textarea></section>';
   }
+  const subText = (t, saved) => (saved ? (t.author ? 'Автор: ' + esc(t.author) : 'Сохранено') + ' · ' : '') + coordsText(t);
   function renderSheet(startState) {
     const t = curTarget();
     if (!t) { closeSheet(); return; }
@@ -463,7 +468,7 @@
     sheet.classList.add('open');
     document.body.classList.add('sheet-open');
     body.innerHTML =
-      '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : 'Новая точка') + '</h2><div class="sub">' + (saved ? 'Сохранено · ' : '') + coordsText(t) + '</div></div>' +
+      '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : 'Новая точка') + '</h2><div class="sub">' + subText(t, saved) + '</div></div>' +
       (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') + '</div>' +
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
@@ -478,7 +483,7 @@
       $('#bMore').addEventListener('click', () => moreMenu(t));
       const ta = $('#descr');
       let tm;
-      ta.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { const s = findSpot(t.id); if (s && !s.shared) { s.note = ta.value; saveLocal(); } }, 400); });
+      ta.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(() => { const s = findSpot(t.id); if (s && !s.shared) { s.note = ta.value; touch(s); } }, 400); });
     } else {
       $('#bSave').addEventListener('click', () => saveDialog({ lat: t.lat, lon: t.lon }));
     }
@@ -571,8 +576,8 @@
     const go = () => {
       const name = inp.value.trim();
       if (!name) { inp.focus(); return; }
-      const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', created: Date.now() };
-      S.spots.push(s); saveLocal(); closeModal();
+      const s = { id: uid(), name: name, lat: p.lat, lon: p.lon, note: '', author: S.me || '', created: Date.now(), updated: Date.now(), dirty: true };
+      S.spots.push(s); saveLocal(); scheduleSync(); closeModal();
       S.temp = null; setTempMarker(null);
       openSpot(s.id, 'half');
       toast('Точка сохранена');
@@ -593,14 +598,14 @@
         '<div class="row"><button class="btn btn-secondary" id="rCancel" type="button">Отмена</button><button class="btn btn-primary" id="rSave" type="button">Сохранить</button></div>');
       const inp = $('#rName'); inp.focus(); inp.select();
       $('#rCancel').onclick = closeModal;
-      const go = () => { const v = inp.value.trim(); if (!v) return; const s = findSpot(t.id); s.name = v; saveLocal(); closeModal(); renderMarkers(); renderSheet(S.state); };
+      const go = () => { const v = inp.value.trim(); if (!v) return; const s = findSpot(t.id); s.name = v; touch(s); closeModal(); renderMarkers(); renderSheet(S.state); };
       $('#rSave').onclick = go; inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     };
     $('#mDel').onclick = () => {
-      openModal('<h3>Удалить точку?</h3><p class="sub">«' + esc(t.name) + '» исчезнет с этого устройства. Это нельзя отменить.</p>' +
+      openModal('<h3>Удалить точку?</h3><p class="sub">«' + esc(t.name) + '» ' + (S.code ? 'исчезнет у всех в группе. Это нельзя отменить.' : 'исчезнет с этого устройства. Это нельзя отменить.') + '</p>' +
         '<div class="row"><button class="btn btn-secondary" id="dCancel" type="button">Отмена</button><button class="btn btn-danger" id="dOk" type="button">Удалить</button></div>');
       $('#dCancel').onclick = closeModal;
-      $('#dOk').onclick = () => { S.spots = S.spots.filter((s) => s.id !== t.id); saveLocal(); closeModal(); closeSheet(); toast('Точка удалена'); };
+      $('#dOk').onclick = () => { S.spots = S.spots.filter((s) => s.id !== t.id); if (isUuid(t.id) && !t.shared) S.tomb.push(t.id); saveLocal(); scheduleSync(); closeModal(); closeSheet(); toast('Точка удалена'); };
     };
   }
 
@@ -643,7 +648,7 @@
       const dist = S.loc ? fmtDist(distance(S.loc, s)) + ' · ' : '';
       const date = s.created ? new Date(s.created).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
       return '<button class="card" type="button" data-id="' + esc(s.id) + '"><span class="thumb">' + ic('fish', 30, 'currentColor', 1.6) + '</span>' +
-        '<span class="ct"><span class="n">' + esc(s.name) + '</span><span class="m">' + dist + (date ? 'сохранена ' + esc(date) : 'общая точка') + '</span>' +
+        '<span class="ct"><span class="n">' + esc(s.name) + '</span><span class="m">' + dist + ((s.author ? esc(s.author) + ' · ' : '') + (date ? (s.author ? '' : 'сохранена ') + esc(date) : 'общая точка')) + '</span>' +
         '<span class="w" data-w="' + esc(s.id) + '"></span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     }).join('');
     box.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
@@ -682,6 +687,7 @@
     menu.innerHTML =
       '<h4>Слой карты</h4><div class="seg" id="segLayer"><button type="button" data-v="osm">Карта</button><button type="button" data-v="topo">Топо</button></div>' +
       '<h4>Тема</h4><div class="seg" id="segTheme"><button type="button" data-v="auto">Авто</button><button type="button" data-v="light">Светлая</button><button type="button" data-v="dark">Тёмная</button></div>' +
+      '<h4>Группа</h4><div id="grp" class="grp"></div>' +
       '<button class="btn btn-secondary" id="bOffline" type="button" style="width:100%;flex:none;height:48px;font-size:15px">' + ic('download', 20) + '<span id="offTxt">Сохранить карту для офлайна</span></button>' +
       '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Офлайн сохраняются плитки вокруг ваших точек для выбранного слоя. Делайте это по Wi-Fi.</p>';
     menu.hidden = false; $('#bLayers').classList.add('on');
@@ -692,6 +698,7 @@
     sync();
     menu.querySelectorAll('#segLayer button').forEach((b) => b.addEventListener('click', () => { setLayer(b.dataset.v); sync(); }));
     menu.querySelectorAll('#segTheme button').forEach((b) => b.addEventListener('click', () => { S.theme = b.dataset.v; lsSet('fishmap.theme', S.theme); applyTheme(); sync(); }));
+    renderGroup();
     $('#bOffline').addEventListener('click', downloadOffline);
   }
   $('#bLayers').addEventListener('click', (e) => { e.stopPropagation(); menu.hidden ? openMenu() : closeMenu(); });
@@ -749,6 +756,151 @@
   }
   window.addEventListener('online', netState); window.addEventListener('offline', netState); netState();
 
+  /* ---------- sync with Supabase (shared group data) ---------- */
+  const SB = { url: 'https://caxuvdrzuurhdtmqbkbg.supabase.co', key: 'sb_publishable_gS7j7lRfJV5rz-nr6AzV7g_Q9lfGNzt' };
+  async function sb(path, opt) {
+    opt = opt || {};
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
+    try {
+      return await fetch(SB.url + '/rest/v1/' + path, {
+        method: opt.method || 'GET', signal: ctl.signal,
+        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'Content-Type': 'application/json' }, opt.headers || {}),
+        body: opt.body ? JSON.stringify(opt.body) : undefined
+      });
+    } finally { clearTimeout(to); }
+  }
+  function syncText() {
+    const st = S.sync.state;
+    if (st === 'busy') return 'Синхронизация…';
+    if (st === 'denied') return 'Код не подошёл';
+    if (st === 'err') return 'Нет связи' + (S.sync.t ? ', последний раз ' + hhmm(S.sync.t) : '');
+    return S.sync.t ? 'Обновлено ' + hhmm(S.sync.t) : 'Ожидание';
+  }
+  function setSync(state) {
+    S.sync.state = state;
+    if (state === 'ok') { S.sync.t = Date.now(); lsSet('fishmap.syncT', S.sync.t); }
+    const el = $('#syncStat'); if (el) el.textContent = syncText();
+  }
+  let syncing = false, syncAgain = false, syncTimer = 0;
+  function scheduleSync(ms) {
+    if (!S.code) return;
+    clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms == null ? 1200 : ms);
+  }
+  async function syncNow() {
+    if (!S.code || !navigator.onLine) return;
+    if (syncing) { syncAgain = true; return; }
+    syncing = true; syncAgain = false; setSync('busy');
+    try {
+      let r = await sb('rpc/group_check', { method: 'POST', body: {} });
+      if (!r.ok) throw new Error('check ' + r.status);
+      if ((await r.json()) !== true) { setSync('denied'); return; }
+      for (const id of S.tomb.slice()) {
+        r = await sb('spots?id=eq.' + id, { method: 'DELETE' });
+        if (!r.ok) throw new Error('delete ' + r.status);
+        S.tomb = S.tomb.filter((x) => x !== id); saveLocal();
+      }
+      const dirty = S.spots.filter((x) => !x.shared && x.dirty);
+      if (dirty.length) {
+        const snap = new Map(dirty.map((x) => [x.id, x.updated]));
+        r = await sb('spots?on_conflict=id', {
+          method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: dirty.map((x) => ({ id: x.id, name: x.name, lat: x.lat, lon: x.lon, note: x.note || '', author: x.author || '', created_at: new Date(x.created || Date.now()).toISOString() }))
+        });
+        if (!r.ok) throw new Error('push ' + r.status);
+        dirty.forEach((x) => { if (snap.get(x.id) === x.updated) delete x.dirty; });
+      }
+      r = await sb('spots?select=*&order=created_at.asc');
+      if (!r.ok) throw new Error('pull ' + r.status);
+      const rows = await r.json();
+      const remote = new Set(rows.map((x) => x.id));
+      const local = new Map(S.spots.filter((x) => !x.shared).map((x) => [x.id, x]));
+      let added = 0;
+      rows.forEach((row) => {
+        const l = local.get(row.id);
+        if (l && l.dirty) return;
+        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', author: row.author || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at) };
+        if (l) Object.assign(l, o); else { S.spots.push(o); added++; }
+      });
+      S.spots = S.spots.filter((x) => x.shared || x.dirty || remote.has(x.id));
+      saveLocal();
+      const first = !S.sync.t;
+      setSync('ok');
+      refreshAfterSync();
+      if (first) toast('Подключено. Точек в группе: ' + rows.length);
+      else if (added) toast('Новых точек: ' + added);
+    } catch (e) {
+      setSync('err');
+    } finally {
+      syncing = false;
+      if (syncAgain) scheduleSync(400);
+    }
+  }
+  function refreshAfterSync() {
+    renderMarkers();
+    if (lv.classList.contains('open')) renderListItems();
+    if (S.sel) {
+      const x = findSpot(S.sel);
+      if (!x) { closeSheet(); return; }
+      const ti = body.querySelector('.title'), su = body.querySelector('.sub');
+      if (ti) ti.textContent = x.name;
+      if (su) su.innerHTML = subText(x, true);
+      const ta = $('#descr');
+      if (ta && document.activeElement !== ta && ta.value !== (x.note || '')) ta.value = x.note || '';
+    }
+  }
+  function askName(after) {
+    openModal('<h3>Как вас зовут?</h3><p class="sub">Имя будет видно рядом с точками, которые вы добавили.</p>' +
+      '<input id="nName" class="input" maxlength="30" value="' + esc(S.me) + '" placeholder="Например: Володя">' +
+      '<div class="row"><button class="btn btn-primary" id="nOk" type="button">Готово</button></div>');
+    const inp = $('#nName'); inp.focus(); inp.select();
+    const go = () => { const v = inp.value.trim(); if (!v) { inp.focus(); return; } S.me = v; lsSet('fishmap.me', v); closeModal(); if (after) after(); };
+    $('#nOk').onclick = go; inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  }
+  async function joinGroup(code) {
+    S.code = code; S.sync.t = 0; lsSet('fishmap.code', code);
+    await syncNow();
+    if (S.sync.state === 'denied') { S.code = ''; lsSet('fishmap.code', ''); toast('Код не подошёл. Проверьте ссылку'); renderGroup(); return false; }
+    renderGroup();
+    if (!S.me) askName(renderGroup);
+    return true;
+  }
+  function leaveGroup() {
+    S.code = ''; lsSet('fishmap.code', ''); S.sync = { state: 'off', t: 0 }; lsSet('fishmap.syncT', 0);
+    S.spots.forEach((x) => { if (!x.shared) x.dirty = true; });
+    saveLocal(); renderGroup();
+  }
+  function renderGroup() {
+    const box = $('#grp'); if (!box) return;
+    if (S.code) {
+      box.innerHTML = '<div class="gl"><b>Подключено к группе</b><span id="syncStat">' + esc(syncText()) + '</span></div>' +
+        '<div class="grow"><button class="btn btn-secondary sm" id="gSync" type="button">Обновить</button><button class="btn btn-secondary sm" id="gName" type="button">' + esc(S.me ? 'Имя: ' + S.me : 'Указать имя') + '</button></div>' +
+        '<button class="linkbtn" id="gOut" type="button">Отключиться от группы</button>';
+      $('#gSync').onclick = () => { if (!navigator.onLine) { toast('Нет интернета'); return; } syncNow(); };
+      $('#gName').onclick = () => { closeMenu(); askName(); };
+      $('#gOut').onclick = leaveGroup;
+    } else {
+      box.innerHTML = '<p class="note" style="margin:0 0 8px">Вставьте ссылку или код группы из Telegram, чтобы видеть общие точки.</p>' +
+        '<div class="grow"><input id="gCode" class="input sm" placeholder="Ссылка или код" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn btn-primary sm" id="gJoin" type="button">Войти</button></div>';
+      const go = () => {
+        const m = /k=([A-Za-z0-9_-]{8,64})/.exec($('#gCode').value) || /^\s*([A-Za-z0-9_-]{16,64})\s*$/.exec($('#gCode').value);
+        if (!m) { toast('Не вижу код. Вставьте ссылку из Telegram целиком'); return; }
+        if (!navigator.onLine) { toast('Нужен интернет'); return; }
+        joinGroup(m[1]);
+      };
+      $('#gJoin').onclick = go; $('#gCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    }
+  }
+  function checkJoin() {
+    const m = /[#&]k=([A-Za-z0-9_-]{8,64})/.exec(location.hash);
+    if (!m) return;
+    const rest = location.hash.slice(1).split('&').filter((x) => x && x.indexOf('k=') !== 0).join('&');
+    history.replaceState(null, '', location.pathname + location.search + (rest ? '#' + rest : ''));
+    if (m[1] !== S.code) joinGroup(m[1]);
+  }
+  window.addEventListener('online', () => scheduleSync(300));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleSync(300); });
+  setInterval(() => { if (!document.hidden) scheduleSync(0); }, 60000);
+
   /* ---------- deep link: #p=lat,lon,name ---------- */
   function checkHash() {
     const m = /^#p=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(.*)$/.exec(location.hash);
@@ -776,8 +928,9 @@
     renderMarkers();
     if (S.spots.length > 1) map.fitBounds(L.latLngBounds(S.spots.map((s) => [s.lat, s.lon])).pad(0.25));
     else if (S.spots.length === 1) map.setView([S.spots[0].lat, S.spots[0].lon], 12);
-    checkHash();
-    window.addEventListener('hashchange', checkHash);
+    checkJoin(); checkHash();
+    window.addEventListener('hashchange', () => { checkJoin(); checkHash(); });
+    if (S.code) syncNow();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   })();
 })();

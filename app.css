@@ -218,3 +218,13 @@ textarea{resize:none;min-height:96px}
 .fnote{font-size:12px;line-height:1.45;color:var(--muted);margin:0}
 .fhead+.fparts,.fwarn+.fparts{margin-top:0}
 .modal-card .row:has(#fOk){position:sticky;bottom:calc(-20px - var(--safe-b));background:var(--surface);padding:10px 0 4px;margin-top:10px}
+
+/* group / sync */
+.grp{margin-bottom:14px}
+.grp .gl{display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
+.grp .gl b{font-size:14px}.grp .gl span{font-size:12px;color:var(--muted)}
+.grow{display:flex;gap:8px}
+.btn.sm{height:40px;border-radius:12px;font-size:14px;padding:0 12px;flex:1}
+.input.sm{height:40px;padding:0 12px;border-radius:12px;font-size:14px;flex:2;min-width:0}
+.grp .grow .btn-primary{flex:1}
+.linkbtn{margin-top:8px;font-size:13px;font-weight:500;color:var(--muted);text-decoration:underline;height:32px}
