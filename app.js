@@ -70,6 +70,10 @@
     code: lsGet('fishmap.code', ''), me: lsGet('fishmap.me', ''), tomb: lsGet('fishmap.v3.tomb', []),
     sync: { state: 'off', t: lsGet('fishmap.syncT', 0) }
   };
+  if (!['auto', 'light', 'dark'].includes(S.theme)) S.theme = 'auto';
+  if (!['osm', 'topo'].includes(S.layer)) S.layer = 'osm';
+  if (!['auto', 'open', 'ice'].includes(S.fishMode)) S.fishMode = 'auto';
+  if (!Array.isArray(S.tomb)) S.tomb = [];
   const KEY = 'fishmap.v3.spots';
   function loadLocal() {
     let arr = lsGet(KEY, null);
@@ -78,7 +82,10 @@
       arr = old.map((s) => ({ id: isUuid(s.id) ? s.id : uid(), name: s.name, lat: s.lat, lon: s.lon, note: s.note || '', author: '', created: s.created || Date.now(), updated: Date.now(), dirty: true }));
       if (arr.length) lsSet(KEY, arr);
     }
-    return arr || [];
+    if (!Array.isArray(arr)) return [];
+    // испорченные записи (нет объекта, id или координат) отбрасываем, чтобы не ронять всё приложение
+    return arr.filter((s) => s && typeof s === 'object' && typeof s.id === 'string' && Number.isFinite(+s.lat) && Number.isFinite(+s.lon) && Math.abs(s.lat) <= 90 && Math.abs(s.lon) <= 180)
+      .map((s) => Object.assign(s, { lat: +s.lat, lon: +s.lon, name: typeof s.name === 'string' && s.name.trim() ? s.name : 'Без названия', season: (s.season === 'summer' || s.season === 'winter' || s.season === 'both') ? s.season : undefined }));
   }
   const saveLocal = () => { lsSet(KEY, S.spots.filter((s) => !s.shared)); lsSet('fishmap.v3.tomb', S.tomb); };
   const touch = (s) => { s.dirty = true; s.updated = Date.now(); saveLocal(); scheduleSync(); };
@@ -88,7 +95,7 @@
   /* ---------- сезоны: лето / зима / оба ---------- */
   const SEAS = { summer: 'Лето', winter: 'Зима', both: 'Оба сезона' };
   const calSeason = () => { const m = new Date().getMonth(); return (m >= 10 || m <= 2) ? 'winter' : 'summer'; };   // пока нет данных о погоде: ноябрь-март зимой
-  S.autoSeason = lsGet('fishmap.autoSeason', null) || calSeason();
+  S.autoSeason = ['summer', 'winter'].includes(lsGet('fishmap.autoSeason', null)) ? lsGet('fishmap.autoSeason', null) : calSeason();
   const seasonOf = (s) => s.season || (s.shared ? 'both' : 'summer');
   const curSeason = () => (S.fishMode === 'ice' ? 'winter' : S.fishMode === 'open' ? 'summer' : S.autoSeason);
   const inSeason = (s) => { const q = seasonOf(s); return q === 'both' || q === curSeason(); };
@@ -450,7 +457,10 @@
     try {
       const c = map.getCenter();
       const [res, hist] = await Promise.all([getWeather(c.lat, c.lng), getHistory(c.lat, c.lng).catch(() => null)]);
-      if (!res) return;
+      // без свежей погоды и свежей истории температур сезон не меняем: иначе кратковременный сбой сети мог бы переключить его
+      if (!res || res.stale || !hist || !hist.time || !hist.time.length) return;
+      const today = res.data.daily.time[0], lastDay = hist.time[hist.time.length - 1];
+      if (!today || !lastDay || (Date.parse(today) - Date.parse(lastDay)) / 864e5 > 2) return;
       const next = fishCtx(res.data, hist).autoIce ? 'winter' : 'summer';
       lsSet('fishmap.autoSeason', next);
       lastAutoCheck = Date.now();
@@ -962,6 +972,13 @@
     renderGroup();
     if ('caches' in window) caches.keys().then((ks) => { const k = ks.find((x) => /shell/.test(x)), el = $('#ver'); if (k && el) el.textContent = '(' + k.replace('fishmap-shell-', '') + ')'; }).catch(() => {});
     $('#bUpdate').addEventListener('click', async () => {
+      // без сети обновлять нельзя: после сброса кэша приложение не откроется
+      try {
+        if (navigator.onLine === false) throw new Error('offline');
+        const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 6000);
+        const r = await fetch('./index.html?chk=' + Date.now(), { cache: 'no-store', signal: ctl.signal }); clearTimeout(to);
+        if (!r.ok) throw new Error('http ' + r.status);
+      } catch (e) { toast('Нет интернета: обновить сейчас нельзя. Приложение продолжит работать как раньше', 5000); return; }
       try {
         if ('serviceWorker' in navigator) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((r) => r.unregister())); }
         if ('caches' in window) { const ks = await caches.keys(); await Promise.all(ks.filter((k) => /shell/.test(k)).map((k) => caches.delete(k))); }

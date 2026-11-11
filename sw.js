@@ -1,5 +1,5 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v23';
+const SHELL = 'fishmap-shell-v24';
 const TILES = 'fishmap-tiles-v1';
 const PHOTOS = 'fishmap-photos-v1'; // фото из группы, их нельзя удалять при обновлении
 const MAX_TILES = 3000;
@@ -63,5 +63,6 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (TILE_HOSTS.includes(url.hostname)) { e.respondWith(tileHandler(req)); return; }
   if (url.origin !== location.origin) return; // погода и прочее идут напрямую
+  if (url.searchParams.has('chk')) return;      // проверка сети перед обновлением: реально идёт в сеть, а не в кэш
   e.respondWith(staleWhileRevalidate(req));
 });
