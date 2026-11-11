@@ -144,6 +144,8 @@ textarea{resize:none;min-height:96px}
 .pinwrap.temp .pin-body{fill:var(--accent)}
 .pinwrap.winter .pin-body{fill:var(--winter)}
 .pinwrap.winter .ring{background:var(--winter-ring)}
+.pinwrap.off svg{opacity:.55}
+.pinwrap.off .ring{opacity:.5}
 .pin-glyph{fill:none;stroke:var(--on-primary);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .pinwrap.temp .pin-glyph{stroke:var(--on-accent)}
 .me{width:22px;height:22px;border-radius:50%;background:#2F7BEA;border:3px solid #fff;box-shadow:0 0 0 8px rgba(47,123,234,.22)}

@@ -125,13 +125,13 @@
   const spotMarkers = new Map();
   let tempMarker = null, meMarker = null;
 
-  function pinHtml(kind, sel, winter) {
+  function pinHtml(kind, sel, winter, off) {
     const glyph = kind === 'temp' ? P.plus : (winter ? P.fishw : P.fish);
-    return '<div class="pinwrap ' + (kind === 'temp' ? 'temp ' : '') + (winter && kind !== 'temp' ? 'winter ' : '') + (sel ? 'sel' : '') + '"><div class="ring"></div>' +
+    return '<div class="pinwrap ' + (kind === 'temp' ? 'temp ' : '') + (winter && kind !== 'temp' ? 'winter ' : '') + (off ? 'off ' : '') + (sel ? 'sel' : '') + '"><div class="ring"></div>' +
       '<svg width="44" height="52" viewBox="0 0 44 52" aria-hidden="true"><path class="pin-body" d="M22 50C22 50 5 33 5 21a17 17 0 0134 0c0 12-17 29-17 29z"/>' +
       '<g class="pin-glyph" transform="translate(10 9)">' + glyph + '</g></svg></div>';
   }
-  const pinIcon = (kind, sel, winter) => L.divIcon({ className: '', html: pinHtml(kind, sel, winter), iconSize: [44, 52], iconAnchor: [22, 50] });
+  const pinIcon = (kind, sel, winter, off) => L.divIcon({ className: '', html: pinHtml(kind, sel, winter, off), iconSize: [44, 52], iconAnchor: [22, 50] });
 
   function renderMarkers() {
     spotMarkers.forEach((m) => m.remove());
@@ -139,7 +139,9 @@
     const win = curSeason() === 'winter';
     // выбранная точка видна всегда, даже если она другого сезона (например, открыта из поиска)
     allSpots().filter((s) => inSeason(s) || S.sel === s.id).forEach((s) => {
-      const m = L.marker([s.lat, s.lon], { icon: pinIcon('saved', S.sel === s.id, win), title: s.name, keyboard: true }).addTo(map);
+      // метка показывает сезон самой точки; точка другого сезона (она открыта) рисуется бледнее
+      const own = seasonOf(s), off = !inSeason(s);
+      const m = L.marker([s.lat, s.lon], { icon: pinIcon('saved', S.sel === s.id, own === 'both' ? win : own === 'winter', off), title: s.name, keyboard: true }).addTo(map);
       m.on('click', () => openSpot(s.id, 'half'));
       spotMarkers.set(s.id, m);
     });
@@ -662,7 +664,7 @@
   function descHtml(t) {
     return '<section class="desc-sec"><h3>Описание</h3><textarea id="descr" aria-label="Описание точки" placeholder="Как подойти, глубина, на что клюёт…" rows="4"' + (t.shared ? ' readonly' : '') + '>' + esc(t.note || '') + '</textarea></section>';
   }
-  const subText = (t, saved) => (saved ? (t.author ? 'Автор: ' + esc(t.author) : 'Сохранено') + ' · ' + SEAS[seasonOf(t)] + ' · ' : '') + coordsText(t);
+  const subText = (t, saved) => (saved ? (t.author ? 'Автор: ' + esc(t.author) : 'Сохранено') + ' · ' + SEAS[seasonOf(t)] + (inSeason(t) ? '' : ' (не сезон)') + ' · ' : '') + coordsText(t);
   function renderSheet(startState) {
     const t = curTarget();
     if (!t) { closeSheet(); return; }
