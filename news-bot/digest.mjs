@@ -380,7 +380,8 @@ async function spotsBlock() {
   if (DRY) for (const t of scored) console.log(`   - ${t.score} | ${t.name}${t.warn ? ' | ' + t.warn : ''}`);
 
   const lines = top.map((t, i) => `${i + 1}. ${esc(t.name)}: ${t.score} из 100, ${t.label}`);
-  let out = `<b>Клёв по нашим точкам</b> (${winter ? 'зима, подлёдная рыбалка' : 'лето, открытая вода'}):\n${lines.join('\n')}`;
+  const head = lines.length >= 3 ? 'Топ 3 точки' : lines.length === 2 ? 'Топ 2 точки' : 'Лучшая точка';
+  let out = `<b>${head}</b> (${winter ? 'зима, подлёдная рыбалка' : 'лето, открытая вода'}):\n${lines.join('\n')}`;
   if (top[0].warn) out += `\n${esc(top[0].warn)}.`;
   if (winter) out += '\nЛёд оценивается только по погоде, толщину проверяйте сами.';
   return out;
