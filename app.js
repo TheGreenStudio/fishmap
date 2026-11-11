@@ -445,7 +445,8 @@
     sheet.classList.toggle('is-mini', wasMini);
     const mini = grab.offsetHeight + 56 + 10 + safeBottom();
     const full = maxFull();
-    const half = clamp(rnd(halfNeed), peek + 80, full);
+    // у точки с фото и отзывами содержимое длинное: половинная высота не больше ~62% экрана, дальше панель листается
+    const half = clamp(Math.min(rnd(halfNeed), rnd(window.innerHeight * 0.62)), peek + 80, full);
     heights = { mini: mini, peek: Math.min(peek, full), half: half, full: full };
   }
   function applyState(st, instant) {
@@ -1068,9 +1069,7 @@
   function closeViewer(fromPop) {
     const v = $('#viewer'); if (!v) return;
     v.remove();
-    if (fromPop !== true && history.state && history.state.fmViewer) history.back();
   }
-  window.addEventListener('popstate', () => { if ($('#viewer')) closeViewer(true); });
   function openViewer(items, startId) {
     closeViewer();
     const v = document.createElement('div'); v.id = 'viewer'; v.className = 'viewer';
@@ -1078,7 +1077,6 @@
       '<div class="vscroll" id="vScroll">' + items.map((it) => '<div class="vslide"><img alt="Фото" ' + (it.pending ? 'src="' + it.thumbUrl + '"' : 'data-path="' + esc(it.path) + '"') + '></div>').join('') + '</div>' +
       '<div class="vbottom"><span id="vInfo"></span><button class="vbtn" id="vDel" type="button" aria-label="Удалить фото">' + ic('trash', 22, 'currentColor', 1.8) + '</button></div>';
     document.body.appendChild(v);
-    try { history.pushState({ fmViewer: 1 }, ''); } catch (e) { /* не критично */ }
     const sc = $('#vScroll'), slides = Array.from(sc.querySelectorAll('.vslide'));
     let cur = Math.max(0, items.findIndex((x) => x.id === startId));
     const loaded = new Set();
@@ -1371,6 +1369,42 @@
   $('#sClose').addEventListener('click', closeSearch);
   $('#bSearch').addEventListener('click', () => (sPanel.hidden ? openSearch() : closeSearch()));
   sPanel.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
+
+  /* ---------- кнопка «Назад» (Android / жест): закрывает верхнее окно, а не выходит из приложения ---------- */
+  const overlays = [   // сверху вниз
+    [() => !!$('#viewer'), () => closeViewer()],
+    [() => !modal.hidden, closeModal],
+    [() => !menu.hidden, closeMenu],
+    [() => !sPanel.hidden, closeSearch],
+    [() => lv.classList.contains('open'), closeList],
+    [() => sheet.classList.contains('open'), closeSheet],
+  ];
+  const anyOverlay = () => overlays.some((o) => o[0]());
+  let histPushed = false, histIgnore = 0;
+  function syncHist() {
+    const any = anyOverlay();
+    if (any && !histPushed) {
+      try { history.pushState({ fmL: 1 }, ''); histPushed = true; } catch (e) { /* не критично */ }
+    } else if (!any && histPushed) {
+      histPushed = false; histIgnore++;
+      try { history.back(); } catch (e) { histIgnore--; }
+    }
+  }
+  window.addEventListener('popstate', () => {
+    if (histIgnore > 0) { histIgnore--; return; }
+    if (!histPushed) return;
+    histPushed = false;
+    const top = overlays.find((o) => o[0]());
+    if (top) top[1]();
+    syncHist();   // если что-то ещё открыто, снова ставим «заслонку» для следующего нажатия
+  });
+  const mo = new MutationObserver(syncHist);
+  mo.observe(sheet, { attributes: true, attributeFilter: ['class'] });
+  mo.observe(lv, { attributes: true, attributeFilter: ['class'] });
+  mo.observe(modal, { attributes: true, attributeFilter: ['hidden'] });
+  mo.observe(menu, { attributes: true, attributeFilter: ['hidden'] });
+  mo.observe(sPanel, { attributes: true, attributeFilter: ['hidden'] });
+  mo.observe(document.body, { childList: true });
 
   /* ---------- deep link: #p=lat,lon,name ---------- */
   function checkHash() {
