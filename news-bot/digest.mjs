@@ -28,6 +28,16 @@ const STATE_FILE = E.STATE_FILE || 'news-bot/state.json';
 const FIXTURES = E.FIXTURE_DIR || '';
 // Логи запусков в публичном репозитории видны всем, а названия наших точек не для чужих глаз.
 // Поэтому в пробных запусках (и в ошибках) названия точек в лог не попадают. Локально с фикстурами показываем как есть.
+// Общий бюджет времени на сбор данных. Если какой-то сайт зависает, лучше отправить то, что успели собрать,
+// чем упереться в лимит задачи (5 минут) и не прислать ничего.
+const BUDGET_MS = Number(E.BUDGET_MS) || 150000;
+const STARTED = Date.now();
+const timeLeft = () => BUDGET_MS - (Date.now() - STARTED);
+export function budgetTimeout(ms) {
+  const left = timeLeft();
+  if (left < 1500) throw new Error('время на сбор данных вышло');
+  return Math.min(ms, left);
+}
 const MASK_SPOTS = E.MASK_SPOTS ? E.MASK_SPOTS === '1' : !FIXTURES;
 
 
@@ -58,13 +68,14 @@ async function getText(url, fixture, headers = {}) {
     try {
       const r = await fetch(url, {
         headers: { 'user-agent': 'Mozilla/5.0 (compatible; WildFishingDigest/1.0)', ...headers },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(budgetTimeout(10000)),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.text();
     } catch (e) {
       lastErr = e;
-      await new Promise((res) => setTimeout(res, 1500));
+      if (attempt === 2 || timeLeft() <= 2500) break;   // бюджет на исходе: повторять нет смысла
+      await new Promise((res) => setTimeout(res, 1000));
     }
   }
   throw lastErr;
@@ -95,17 +106,19 @@ function parseRss(xml) {
   }).filter((i) => i.title && i.link && !Number.isNaN(i.date.getTime()));
 }
 
-async function pickNews(section, state, used) {
+export async function pickNews(section, state, used) {
   const all = new Map();
-  let failed = 0;
-  for (const q of section.queries) {
+  const results = await Promise.allSettled(section.queries.map((q) => {
     const url = 'https://news.google.com/rss/search?q='
       + encodeURIComponent(`${q} when:${section.days}d`)
       + '&hl=en-CA&gl=CA&ceid=CA:en';
-    try {
-      for (const it of parseRss(await getText(url, section.fixture))) all.set(it.link, it);
-    } catch (e) { failed++; console.error(`${section.title}: запрос «${q}» не удался (${e.message})`); }
-  }
+    return getText(url, section.fixture).then(parseRss);
+  }));
+  let failed = 0;
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') for (const it of r.value) all.set(it.link, it);
+    else { failed++; console.error(`${section.title}: запрос «${section.queries[i]}» не удался (${r.reason && r.reason.message})`); }
+  });
   if (failed === section.queries.length) throw new Error('все запросы не удались');
   const cutoff = Date.now() - section.days * 864e5;
   const found = [...all.values()]
@@ -121,11 +134,10 @@ async function pickNews(section, state, used) {
 
   // Берём самую свежую новость, к которой удалось получить краткое описание со страницы статьи.
   // Если ни к одной не удалось, остаётся самая свежая, но только с заголовком.
-  const top = found.slice(0, 4);
-  for (const f of top) {
-    f.summary = await fetchSummary(f);
-    if (f.summary) return f;
-  }
+  const top = found.slice(0, 3);
+  await Promise.all(top.map(async (f) => { f.summary = await fetchSummary(f); }));
+  const best = top.find((f) => f.summary);
+  if (best) return best;
   if (top[0]) console.log(`${section.title}: описание получить не удалось, будет только заголовок`);
   return top[0] || null;
 }
@@ -141,7 +153,7 @@ async function tryFetch(url, init = {}) {
       'accept-language': 'en-CA,en;q=0.9',
       ...(init.headers || {}),
     },
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(budgetTimeout(10000)),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.text();
@@ -265,7 +277,7 @@ async function loadSpots() {
   if (FIXTURES) rows = JSON.parse(fs.readFileSync(`${FIXTURES}/spots_db.json`, 'utf8'));
   else {
     const chk = await fetch(`${SB_URL}/rest/v1/rpc/group_check`, {
-      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000),
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(budgetTimeout(10000)),
     });
     if (!chk.ok || (await chk.json()) !== true) throw new Error('код группы не подошёл');
     rows = JSON.parse(await getText(`${SB_URL}/rest/v1/spots?select=*&order=created_at.asc`, '', headers));
