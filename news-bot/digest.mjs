@@ -456,7 +456,7 @@ async function main() {
 
   if (!FORCE) {
     if (state.lastSentDate === today) { console.log('Сегодня уже отправляли, выходим.'); return; }
-    // Два cron-запуска (зима и лето): отправляем только в окне 7:20-12:00 по Calgary.
+    // Два cron-запуска (основной и повтор через час): отправляем только в окне 7:20-12:00 по Calgary.
     if (minutes < 7 * 60 + 20 || minutes >= 12 * 60) { console.log('Не время отправки, выходим.'); return; }
   }
 

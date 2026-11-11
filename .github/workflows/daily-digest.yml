@@ -4,8 +4,10 @@
 name: daily-digest
 on:
   schedule:
-    # 7:30 по Calgary: зимой (MST) это 14:30 UTC, летом (MDT) 13:30 UTC.
-    # Скрипт сам отправляет только в окне 7:20-12:00 по Calgary и не больше раза в день.
+    # С ноября 2026 Альберта живёт на постоянном UTC-6 (без перехода на зимнее время): 7:30 по Calgary = 13:30 UTC.
+    # Второй запуск в 14:30 UTC (8:30 по Calgary) нужен как повтор на случай сбоя первого.
+    # Скрипт сам отправляет только в окне 7:20-12:00 по Calgary и не больше раза в день (дата хранится в кэше).
+    # Если правила времени в Альберте снова изменятся, поменяйте константу TZ в news-bot/digest.mjs.
     - cron: '30 13 * * *'
     - cron: '30 14 * * *'
   workflow_dispatch:
@@ -32,21 +34,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: news-bot
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
+          check-latest: true
       - name: Restore state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: news-bot/state.json
           key: digest-state-none
           restore-keys: digest-state-
       - name: Restore selftest cache
         if: inputs.selftest
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: news-bot/selftest.json
           key: digest-selftest-none
@@ -66,13 +69,13 @@ jobs:
         run: node news-bot/digest.mjs
       - name: Save state
         if: always() && steps.digest.outputs.saved == 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: news-bot/state.json
           key: digest-state-${{ github.run_id }}
       - name: Save selftest cache
         if: always() && steps.digest.outputs.selftest == 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: news-bot/selftest.json
           key: digest-selftest-${{ github.run_id }}
