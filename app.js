@@ -456,7 +456,7 @@
     if (instant) sheet.classList.add('dragging');
     sheet.style.setProperty('--h', heights[st] + 'px');
     if (instant) { sheet.offsetHeight; sheet.classList.remove('dragging'); }
-    if (st !== 'full') scroll.scrollTop = 0;
+    if (st === 'mini') scroll.scrollTop = 0;
   }
   function layoutSheet() {
     if (!sheet.classList.contains('open')) return;

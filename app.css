@@ -87,7 +87,7 @@ html[data-theme=dark] .btn-danger{color:#FF8A8A}
 .grab{flex:none;height:28px;display:flex;align-items:center;justify-content:center;touch-action:none;cursor:grab}
 .grab i{width:40px;height:4px;border-radius:2px;background:var(--border)}
 .scroll{flex:1;min-height:0;overflow:hidden;padding:0 20px;position:relative;overscroll-behavior:contain}
-.sheet.is-full .scroll{overflow-y:auto}
+.sheet:not(.is-mini) .scroll{overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y}
 .head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
 .titlecol{min-width:0}
 .title{font-size:22px;font-weight:700;letter-spacing:-.01em;line-height:1.2;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
