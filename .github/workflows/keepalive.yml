@@ -1,15 +1,41 @@
-# Раз в несколько дней будит базу Supabase, чтобы бесплатный проект не засыпал
+# Раз в несколько дней будит базу Supabase, чтобы бесплатный проект не засыпал.
+# Заодно не даёт GitHub отключить само расписание: в публичном репозитории оно
+# останавливается после 60 дней без коммитов, а тогда база уснула бы через неделю.
 name: keepalive
 on:
   schedule:
     - cron: '17 9 * * 1,4'
   workflow_dispatch:
+    inputs:
+      force_commit:
+        description: 'Сделать пустой коммит, даже если репозиторий не старый (для проверки)'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+  actions: write
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Ping Supabase
         run: |
           curl -fsS -X POST "https://caxuvdrzuurhdtmqbkbg.supabase.co/rest/v1/rpc/group_check" \
             -H "apikey: sb_publishable_gS7j7lRfJV5rz-nr6AzV7g_Q9lfGNzt" \
             -H "Content-Type: application/json" -d '{}'
+      - name: Keep the schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/keepalive.yml/enable"
+      - name: Empty commit if the repository is getting stale
+        run: |
+          age=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+          if [ "$age" -gt $((45*86400)) ] || [ "${{ inputs.force_commit }}" = "true" ]; then
+            git config user.name "fishmap-keepalive"
+            git config user.email "actions@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive: пустой коммит, чтобы GitHub не отключил расписание"
+            git push
+          else
+            echo "Последний коммит свежий (${age} с), коммит не нужен"
+          fi
