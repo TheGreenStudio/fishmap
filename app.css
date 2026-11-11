@@ -68,7 +68,7 @@ body.is-offline .menu{top:calc(140px + var(--safe-t))}
 .menu .note{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.45}
 
 /* buttons */
-.btn{height:52px;border-radius:16px;padding:0 16px;font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;flex:1;text-decoration:none;white-space:nowrap}
+.btn{min-width:0;height:52px;border-radius:16px;padding:0 16px;font-size:16px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;flex:1;text-decoration:none;white-space:nowrap}
 .btn-primary{background:var(--primary);color:var(--on-primary)}
 .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
 .btn-danger{background:var(--surface2);color:#C92A2A;border:1px solid var(--border)}
@@ -90,7 +90,8 @@ html[data-theme=dark] .btn-danger{color:#FF8A8A}
 .sheet.is-full .scroll{overflow-y:auto}
 .head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
 .titlecol{min-width:0}
-.title{font-size:22px;font-weight:700;letter-spacing:-.01em;line-height:1.2;overflow-wrap:anywhere}
+.title{font-size:22px;font-weight:700;letter-spacing:-.01em;line-height:1.2;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+.titlecol .sub{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 .sub{font-size:13px;color:var(--muted);margin-top:4px}
 .muted{color:var(--muted)}
 .wxnow{margin-bottom:12px;min-height:60px}
@@ -297,3 +298,7 @@ textarea{resize:none;min-height:96px}
 .shead{padding:10px 10px 4px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .smsg{padding:12px 10px;font-size:14px;color:var(--muted);line-height:1.4}
 .smsg.warn{color:var(--warn-text)}
+
+@media (max-width:360px){.actions{gap:8px}.actions .btn{padding:0 8px;font-size:14px;gap:5px}.actions .btn svg{display:none}}
+
+#sheet.typing .actions,.sheet.typing .actions{display:none}

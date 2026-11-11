@@ -654,6 +654,10 @@
     };
   }
 
+  // при наборе текста панель кнопок внизу прячется, иначе она закрывает кнопку «Отправить» над клавиатурой
+  sheet.addEventListener('focusin', (e) => { if (e.target.matches && e.target.matches('textarea')) { sheet.classList.add('typing'); setTimeout(() => { try { e.target.scrollIntoView({ block: 'center' }); } catch (x) { /* не критично */ } }, 250); } });
+  sheet.addEventListener('focusout', (e) => { if (e.target.matches && e.target.matches('textarea')) setTimeout(() => { if (!sheet.contains(document.activeElement) || !document.activeElement.matches('textarea')) sheet.classList.remove('typing'); }, 450); });
+
   /* ---------- list ---------- */
   const lv = $('#listView');
   function openList() {
