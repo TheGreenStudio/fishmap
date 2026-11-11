@@ -17,7 +17,12 @@ import { pathToFileURL } from 'node:url';
 import { fishCtx, fishDay } from './fishscore.mjs';
 import { norm, SECTIONS, MUST, STRONG, TRAVEL, BLOCK, sameStory, alreadySent, cleanSummary } from './filters.mjs';
 
-const TZ = 'America/Edmonton';
+// Альберта с ноября 2026 живёт на постоянном летнем времени (UTC-6 круглый год).
+// Версия базы часовых поясов на раннере GitHub (Node 20) об этом не знает и считала бы время на час раньше
+// (проверено запуском 2026-11-11), поэтому местное время считаем по фиксированному поясу, а не по 'America/Edmonton'.
+// Если Альберта снова начнёт переводить часы, поменять здесь.
+const TZ = 'Etc/GMT+6';
+const WEATHER_TZ = 'America/Edmonton';   // только для запросов к Open-Meteo (границы суток, разница не больше часа)
 const LAT = 51.0447;
 const LON = -114.0719;
 const E = process.env;
@@ -46,7 +51,7 @@ const MASK_SPOTS = E.MASK_SPOTS ? E.MASK_SPOTS === '1' : !FIXTURES;
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-function localParts(d) {
+export function localParts(d) {
   const p = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
       timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -229,7 +234,7 @@ async function weatherBlock(today) {
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${LAT}&longitude=${LON}`
     + '&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,snowfall_sum,precipitation_sum,wind_gusts_10m_max'
-    + `&past_days=5&forecast_days=7&timezone=${encodeURIComponent(TZ)}`;
+    + `&past_days=5&forecast_days=7&timezone=${encodeURIComponent(WEATHER_TZ)}`;
   const d = JSON.parse(await getText(url, 'weather.json')).daily;
   const i0 = d.time.indexOf(today);
   if (i0 < 0) throw new Error('нет сегодняшней даты в прогнозе');
@@ -431,7 +436,7 @@ async function main() {
   const { date: today, minutes } = localParts(now);
 
   if (E.SELFTEST === '1') { selftest(); return; }
-  console.log(`Время в Calgary: ${today} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} (tz ${process.versions.tz || 'неизвестно'}, Node ${process.version})`);
+  console.log(`Время в Calgary: ${today} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} (UTC-6; tzdata раннера ${process.versions.tz || 'неизвестно'}, Node ${process.version})`);
 
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* первого запуска ещё не было или кэш потерян */ }
