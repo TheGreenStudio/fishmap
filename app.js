@@ -326,9 +326,9 @@
   /* --- режим и оценка льда --- */
   const HIST_TTL = 6 * 3600 * 1000;
   const histKey = (lat, lon) => 'fishmap.hist.' + lat.toFixed(1) + ',' + lon.toFixed(1);
-  function histCached(lat, lon) { const c = lsGet(histKey(lat, lon), null); return c && c.data ? c.data : null; }
   // температуры за последние 30 дней (отдельный лёгкий запрос, кэш 6 часов; нужен только для подлёдного режима)
-  async function getHistory(lat, lon) {
+  const getHistory = (lat, lon) => once('h' + histKey(lat, lon), () => fetchHistory(lat, lon));
+  async function fetchHistory(lat, lon) {
     const key = histKey(lat, lon), cached = lsGet(key, null);
     if (cached && cached.data && Date.now() - cached.t < HIST_TTL) return cached.data;
     try {
@@ -437,9 +437,11 @@
     $('#fOk').onclick = closeModal;
     $('#segFish').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { setFishMode(b.dataset.v); showFish(); }));
   }
-  function onSeasonChange() {
+  function onSeasonChange(announce) {
     renderMarkers();
     if (lv.classList.contains('open')) renderListItems();
+    const hidden = allSpots().length - seasonSpots().length;
+    if (announce && hidden) toast('Сезон: ' + SEAS[curSeason()] + '. Скрыто точек другого сезона: ' + hidden, 4500);
   }
   let lastAutoCheck = 0;
   async function refreshAutoSeason() {
@@ -450,13 +452,14 @@
       const next = fishCtx(res.data, hist).autoIce ? 'winter' : 'summer';
       lsSet('fishmap.autoSeason', next);
       lastAutoCheck = Date.now();
-      if (next !== S.autoSeason) { const before = curSeason(); S.autoSeason = next; if (curSeason() !== before) onSeasonChange(); }
+      if (next !== S.autoSeason) { const before = curSeason(); S.autoSeason = next; if (curSeason() !== before) onSeasonChange(true); }
     } catch (e) { /* без данных остаётся прежний сезон */ }
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastAutoCheck > 30 * 60 * 1000) refreshAutoSeason(); });
   function setFishMode(v) {
+    const before = curSeason();
     S.fishMode = v; lsSet('fishmap.fishmode', v);
-    onSeasonChange();
+    onSeasonChange(curSeason() !== before);
     if (S.wxRes && sheet.classList.contains('open')) fillWeather(S.wxRes, S.wxHist);
     if (lv.classList.contains('open')) renderListItems();
     const sg = document.querySelector('#segFishMode');
@@ -464,7 +467,11 @@
   }
 
   /* ---------- weather ---------- */
-  async function getWeather(lat, lon) {
+  // одинаковые запросы, идущие одновременно (например, много точек рядом в списке), объединяем в один
+  const inflight = new Map();
+  const once = (key, fn) => { if (!inflight.has(key)) inflight.set(key, fn().finally(() => inflight.delete(key))); return inflight.get(key); };
+  const getWeather = (lat, lon) => once('wx' + lat.toFixed(2) + ',' + lon.toFixed(2), () => fetchWeather(lat, lon));
+  async function fetchWeather(lat, lon) {
     const key = 'fishmap.wx.' + lat.toFixed(2) + ',' + lon.toFixed(2);
     const cached = lsGet(key, null);
     if (cached && Date.now() - cached.t < 15 * 60 * 1000) return { data: cached.data, t: cached.t, stale: false };
@@ -569,7 +576,7 @@
 
   async function loadWeather(t) {
     const key = (t.id || 'temp') + ':' + t.lat + ',' + t.lon;
-    S.wxKey = key;
+    S.wxKey = key; S.wxRes = null; S.wxHist = null;   // погода предыдущей точки не должна попасть в новую при смене режима
     const [res, hist] = await Promise.all([getWeather(t.lat, t.lon), getHistory(t.lat, t.lon).catch(() => null)]);
     if (S.wxKey !== key) return;
     if (!res) {
