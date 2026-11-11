@@ -64,7 +64,7 @@
   const S = {
     dev: dev,
     spots: [], shared: [], sel: null, temp: null, state: 'peek', loc: null,
-    theme: lsGet('fishmap.theme', 'auto'), layer: lsGet('fishmap.layer', 'osm'),
+    theme: lsGet('fishmap.theme', 'auto'), layer: lsGet('fishmap.layer', 'osm'), fishMode: lsGet('fishmap.fishmode', 'auto'),
     filter: 'all', q: '', wxKey: '',
     code: lsGet('fishmap.code', ''), me: lsGet('fishmap.me', ''), tomb: lsGet('fishmap.v3.tomb', []),
     sync: { state: 'off', t: lsGet('fishmap.syncT', 0) }
@@ -170,8 +170,10 @@
   }
 
   /* ---------- fishing score (0–100) ----------
-     Эвристика по погоде, не гарантия клёва. Веса: давление 25, температура 25,
-     ветер 20, свет/облачность 15, осадки 10, время суток 5. */
+     Эвристика по погоде, не гарантия клёва. Два режима:
+     открытая вода: давление 25, температура 25, ветер 20, свет 15, осадки 10, время суток 5;
+     подлёдная: давление 25, ощущаемая температура 20, ветер 15, лёд (оценка) 15, время 10, свет 10, осадки 5.
+     Кривые намеренно узкие: обычный день без проблем даёт 55–70, «Отлично» редкость. */
   function interp(pts, x) {
     if (x <= pts[0][0]) return pts[0][1];
     for (let i = 1; i < pts.length; i++) {
@@ -179,12 +181,25 @@
     }
     return pts[pts.length - 1][1];
   }
-  const F_TEMP = [[-15, 0], [-5, 6], [3, 16], [8, 25], [20, 25], [27, 15], [35, 3], [40, 0]];
-  const F_PDELTA = [[-8, 6], [-5, 12], [-3, 18], [-1, 18], [0, 14], [1, 13], [3, 10], [6, 5], [9, 3]];
-  const F_PABS = [[980, 0], [995, 2], [1005, 6], [1010, 7], [1022, 7], [1030, 4], [1040, 2]];
-  const F_WIND = [[0, 20], [8, 20], [14, 15], [20, 8], [28, 2], [36, 0]];
-  const F_CLOUD = [[0, 6], [30, 9], [60, 13], [85, 15], [100, 15]];
-  const F_RAIN = [[0, 10], [0.5, 9], [3, 6], [8, 2], [15, 0]];
+  // открытая вода
+  const F_TEMP = [[-15, 0], [-5, 4], [3, 11], [8, 19], [12, 24], [18, 25], [24, 18], [28, 9], [35, 2], [40, 0]];
+  const F_PDELTA = [[-8, 3], [-5, 6], [-3, 14], [-1, 18], [0, 10], [1, 9], [3, 6], [6, 3], [9, 1]];
+  const F_PABS = [[980, 0], [995, 2], [1005, 5], [1010, 7], [1022, 7], [1030, 4], [1040, 2]];
+  const F_WIND = [[0, 20], [5, 20], [10, 15], [16, 9], [22, 4], [28, 1], [36, 0]];
+  const F_CLOUD = [[0, 4], [30, 8], [60, 12], [85, 14], [100, 13]];
+  const F_RAIN = [[0, 10], [0.5, 8], [2, 5], [5, 2], [10, 0]];
+  // подлёдная
+  const F_WIND_ICE = [[0, 15], [6, 15], [12, 10], [20, 5], [28, 1], [36, 0]];
+  const F_CHILL = [[-45, 0], [-35, 3], [-27, 8], [-18, 15], [-10, 20], [-2, 20], [0, 14], [2, 6], [4, 0]];
+  const F_CLOUD_ICE = [[0, 5], [30, 7], [60, 9], [85, 10], [100, 10]];
+  const F_RAIN_ICE = [[0, 5], [0.5, 4], [3, 2], [8, 0]];
+
+  // ощущаемая температура с ветром (формула Environment Canada, для t ≤ 0 и ветра > 5 км/ч)
+  function windChill(t, v) {
+    if (t > 0 || v <= 5) return t;
+    const p = Math.pow(v, 0.16);
+    return 13.12 + 0.6215 * t - 11.37 * p + 0.3965 * t * p;
+  }
 
   function codePrecip(c) {
     if (c >= 95) return 15;
@@ -206,52 +221,158 @@
     const m = Math.round(h * 6) * 10, hh = ((Math.floor(m / 60) % 24) + 24) % 24, mm = m % 60;
     return hh + ':' + (mm < 10 ? '0' : '') + mm;
   }
-  function levelOf(s) { return s < 30 ? 'bad' : s < 50 ? 'low' : s < 70 ? 'mid' : s < 85 ? 'good' : 'top'; }
+  function levelOf(s) { return s < 25 ? 'bad' : s < 45 ? 'low' : s < 65 ? 'mid' : s < 83 ? 'good' : 'top'; }
   const LEVEL_TXT = { bad: 'Плохо', low: 'Слабо', mid: 'Средне', good: 'Хорошо', top: 'Отлично' };
 
-  function fishScore(i) {
+  function pressureParts(i) {
+    const dp = i.dp, dpts = dp == null ? 12 : interp(F_PDELTA, dp);
+    const pw = dp == null ? 'тренд неизвестен' : dp <= -4.5 ? 'быстро падает (идёт фронт)' : dp < -1 ? 'медленно падает' : dp <= 1 ? 'стабильно' : dp < 4.5 ? 'растёт' : 'быстро растёт';
+    return { name: 'Давление', max: 25, pts: dpts + interp(F_PABS, i.pressure), text: mmHg(i.pressure) + ' мм, ' + pw };
+  }
+  function timeOfDay(i, peakPts, dayPts, nightPts) {
+    if (i.dayMode) return { pts: peakPts, text: 'считаем лучшее время суток' };
+    const sr = i.sr == null ? 6.5 : i.sr, ss = i.ss == null ? 19 : i.ss, h = i.hour;
+    if ((h >= sr - 1 && h <= sr + 2.5) || (h >= ss - 2.5 && h <= ss + 1)) return { pts: peakPts, text: 'утро или вечер, самое активное время' };
+    if (h > sr && h < ss) return { pts: dayPts, text: 'день' };
+    return { pts: nightPts, text: 'ночь' };
+  }
+  // итог строже простой суммы: «Отлично» только когда совпадает почти всё, обычный день без проблем даёт 65–80
+  const SHAPE = 2.4;
+  function finishScore(parts, caps) {
+    let score = 0;
+    parts.forEach((p) => { p.pts = rnd(p.pts); score += p.pts; });
+    score = 100 * Math.pow(clamp(score, 0, 100) / 100, SHAPE);
+    let warn = '', cap = 100;
+    caps.forEach((c) => { if (c.cap < cap) { cap = c.cap; warn = c.warn; } });
+    score = clamp(rnd(Math.min(score, cap)), 0, 100);
+    return { score: score, lvl: levelOf(score), label: LEVEL_TXT[levelOf(score)], parts: parts, warn: warn };
+  }
+
+  function fishScoreOpen(i) {
     const parts = [];
-    // температура воздуха (замена температуры воды)
     const t = i.temp;
     parts.push({ name: 'Температура', max: 25, pts: interp(F_TEMP, t),
       text: fmtT(t) + (t < -5 ? ', сильный холод' : t < 3 ? ', холодно' : t < 8 ? ', прохладно' : t <= 20 ? ', комфортно' : t <= 27 ? ', тепло' : ', жарко, вода может перегреться') });
-    // давление: тренд за 6 ч + абсолютное значение
-    const dp = i.dp, dpts = dp == null ? 14 : interp(F_PDELTA, dp);
-    const pw = dp == null ? 'тренд неизвестен' : dp <= -4.5 ? 'быстро падает (идёт фронт)' : dp < -1 ? 'медленно падает' : dp <= 1 ? 'стабильно' : dp < 4.5 ? 'растёт' : 'быстро растёт';
-    parts.push({ name: 'Давление', max: 25, pts: dpts + interp(F_PABS, i.pressure), text: mmHg(i.pressure) + ' мм, ' + pw });
-    // ветер
+    parts.push(pressureParts(i));
     const eff = i.wind + 0.5 * Math.max(0, i.gust - i.wind);
     parts.push({ name: 'Ветер', max: 20, pts: interp(F_WIND, eff),
       text: (i.dayMode ? 'до ' : '') + rnd(i.wind) + ' км/ч, порывы ' + rnd(i.gust) + (eff <= 8 ? ', слабый' : eff <= 15 ? ', лёгкий' : eff <= 22 ? ', заметный' : eff <= 30 ? ', сильный' : ', очень сильный') });
-    // облачность / свет
     parts.push({ name: 'Свет', max: 15, pts: interp(F_CLOUD, i.cloud),
       text: rnd(i.cloud) + '% облаков' + (i.cloud >= 60 ? ', рассеянный свет' : i.cloud < 30 ? ', яркое солнце, рыба осторожнее' : '') });
-    // осадки
     parts.push({ name: 'Осадки', max: 10, pts: interp(F_RAIN, i.precip),
       text: i.precip < 0.2 ? 'без осадков' : (i.precip < 10 ? i.precip.toFixed(1).replace('.', ',') : rnd(i.precip)) + ' мм' });
-    // время суток
-    let tp, tt;
-    if (i.dayMode) { tp = 5; tt = 'считаем лучшее время суток'; }
-    else {
-      const sr = i.sr == null ? 6.5 : i.sr, ss = i.ss == null ? 19 : i.ss, h = i.hour;
-      if ((h >= sr - 1 && h <= sr + 2.5) || (h >= ss - 2.5 && h <= ss + 1)) { tp = 5; tt = 'утро или вечер, самое активное время'; }
-      else if (h > sr && h < ss) { tp = 3; tt = 'день'; }
-      else { tp = 2; tt = 'ночь'; }
-    }
-    parts.push({ name: 'Время суток', max: 5, pts: tp, text: tt });
-
-    let score = 0;
-    parts.forEach((p) => { p.pts = rnd(p.pts); score += p.pts; });
-    let warn = '';
-    if (i.code >= 95) { score = Math.min(score, 15); warn = 'Гроза: рыбачить небезопасно'; }
-    else if (i.gust >= 65) { score = Math.min(score, 25); warn = 'Очень сильный ветер: рыбалка опасна'; }
-    else if (t <= -25) { score = Math.min(score, 20); warn = 'Сильный мороз'; }
-    score = clamp(rnd(score), 0, 100);
-    return { score: score, lvl: levelOf(score), label: LEVEL_TXT[levelOf(score)], parts: parts, warn: warn };
+    const td = timeOfDay(i, 5, 3, 2);
+    parts.push({ name: 'Время суток', max: 5, pts: td.pts, text: td.text });
+    const caps = [];
+    if (i.code >= 95) caps.push({ cap: 15, warn: 'Гроза: рыбачить небезопасно' });
+    if (i.gust >= 65) caps.push({ cap: 25, warn: 'Очень сильный ветер: рыбалка опасна' });
+    if (t <= -25) caps.push({ cap: 20, warn: 'Сильный мороз' });
+    if (eff >= 32) caps.push({ cap: 35, warn: 'Очень сильный ветер: рыбачить тяжело и опасно' });
+    return finishScore(parts, caps);
   }
-  function fishNow(d, series) {
+
+  const ICE_TXT = {
+    none: 'льда, скорее всего, ещё нет',
+    thin: 'лёд, скорее всего, тонкий',
+    check: 'лёд мог встать, нужна проверка толщины',
+    ok: 'лёд, вероятно, держит, но всё равно проверьте',
+    unknown: 'нет данных о морозах за последние дни'
+  };
+  function fishScoreIce(i) {
+    const parts = [];
+    const chill = windChill(i.temp, i.wind);
+    let cp = interp(F_CHILL, chill);
+    if (i.thaw) cp = Math.min(cp, 6);
+    parts.push(pressureParts(i));
+    const eff = i.wind + 0.5 * Math.max(0, i.gust - i.wind);
+    parts.push({ name: 'Ветер', max: 15, pts: interp(F_WIND_ICE, eff),
+      text: (i.dayMode ? 'до ' : '') + rnd(i.wind) + ' км/ч, порывы ' + rnd(i.gust) + (eff <= 8 ? ', слабый' : eff <= 15 ? ', лёгкий' : eff <= 22 ? ', заметный, холодно у лунки' : eff <= 30 ? ', сильный, мело́ет снег' : ', очень сильный') });
+    parts.push({ name: 'Ощущаемая температура', max: 20, pts: cp,
+      text: fmtT(chill) + (i.thaw ? ', оттепель, лёд слабеет' : chill <= -35 ? ', опасный мороз' : chill <= -27 ? ', очень холодно' : chill <= -18 ? ', морозно' : chill <= -3 ? ', комфортно для льда' : chill <= 1 ? ', около нуля' : ', тепло, лёд слабеет') });
+    const cat = i.iceCat || 'unknown';
+    const ip = { none: 0, thin: 2, check: 9, ok: 15, unknown: 7 }[cat];
+    parts.push({ name: 'Лёд (оценка)', max: 15, pts: i.thaw ? Math.min(ip, 3) : ip, text: i.thaw ? 'оттепель съедает лёд, на лёд не выходить' : ICE_TXT[cat] });
+    parts.push({ name: 'Свет', max: 10, pts: interp(F_CLOUD_ICE, i.cloud),
+      text: rnd(i.cloud) + '% облаков' + (i.cloud >= 60 ? ', рассеянный свет' : i.cloud < 30 ? ', яркое солнце, рыба осторожнее' : '') });
+    parts.push({ name: 'Осадки', max: 5, pts: interp(F_RAIN_ICE, i.precip),
+      text: i.precip < 0.2 ? 'без осадков' : (i.precip < 10 ? i.precip.toFixed(1).replace('.', ',') : rnd(i.precip)) + ' мм' });
+    const td = timeOfDay(i, 10, 5, 2);
+    parts.push({ name: 'Время суток', max: 10, pts: td.pts, text: td.text });
+    const caps = [];
+    if (i.code >= 95) caps.push({ cap: 15, warn: 'Гроза: рыбачить небезопасно' });
+    if (i.gust >= 65) caps.push({ cap: 25, warn: 'Очень сильный ветер: рыбалка опасна' });
+    if (i.thaw) caps.push({ cap: 30, warn: 'Оттепель: лёд может быть ненадёжным' });
+    if (cat === 'none') caps.push({ cap: 20, warn: 'Льда, скорее всего, ещё нет: не выходить' });
+    if (cat === 'thin') caps.push({ cap: 25, warn: 'Лёд, скорее всего, тонкий: не выходить' });
+    if (chill <= -35) caps.push({ cap: 20, warn: 'Опасный мороз: риск обморожения' });
+    else if (chill <= -30) caps.push({ cap: 30, warn: 'Очень сильный мороз: риск обморожения' });
+    if (eff >= 32) caps.push({ cap: 30, warn: 'Очень сильный ветер или метель: на льду опасно' });
+    return finishScore(parts, caps);
+  }
+  const fishScore = (i) => (i.ice ? fishScoreIce(i) : fishScoreOpen(i));
+
+  /* --- режим и оценка льда --- */
+  const HIST_TTL = 6 * 3600 * 1000;
+  const histKey = (lat, lon) => 'fishmap.hist.' + lat.toFixed(1) + ',' + lon.toFixed(1);
+  function histCached(lat, lon) { const c = lsGet(histKey(lat, lon), null); return c && c.data ? c.data : null; }
+  // температуры за последние 30 дней (отдельный лёгкий запрос, кэш 6 часов; нужен только для подлёдного режима)
+  async function getHistory(lat, lon) {
+    const key = histKey(lat, lon), cached = lsGet(key, null);
+    if (cached && cached.data && Date.now() - cached.t < HIST_TTL) return cached.data;
+    try {
+      const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 7000);
+      const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(2) + '&longitude=' + lon.toFixed(2) +
+        '&daily=temperature_2m_max,temperature_2m_min&past_days=30&forecast_days=1&timezone=auto', { signal: ctl.signal });
+      clearTimeout(to);
+      if (!r.ok) throw new Error('http ' + r.status);
+      const j = await r.json();
+      const data = { time: j.daily.time, tmax: j.daily.temperature_2m_max, tmin: j.daily.temperature_2m_min };
+      lsSet(key, { t: Date.now(), data });
+      return data;
+    } catch (e) { return cached && cached.data ? cached.data : null; }
+  }
+  // дни строго до сегодняшнего
+  function histBefore(hist, today) {
+    const out = [];
+    if (!hist || !hist.time) return out;
+    for (let k = 0; k < hist.time.length; k++) {
+      if (hist.time[k] >= today) break;
+      if (hist.tmax[k] != null && hist.tmin[k] != null) out.push({ mx: hist.tmax[k], mn: hist.tmin[k] });
+    }
+    return out;
+  }
+  // грубая оценка толщины льда по накопленному морозу (Стефан): h = 1,8 * sqrt(градусо-дни мороза - 25), запас на осторожность. Оттепель сильно «съедает».
+  // Это ориентир, не разрешение выходить на лёд: толщину в сантиметрах не показываем.
+  function iceCategory(days) {
+    if (!days.length) return 'unknown';
+    let fdd = 0;
+    days.forEach((x) => { const m = (x.mx + x.mn) / 2; fdd = m < 0 ? fdd - m : Math.max(0, fdd - 1.5 * m); });
+    const h = 1.8 * Math.sqrt(Math.max(0, fdd - 25));
+    return h < 5 ? 'none' : h < 10 ? 'thin' : h < 20 ? 'check' : 'ok';
+  }
+  function fishCtx(d, hist) {
+    const dy = d.daily, mode = S.fishMode || 'auto';
+    const past = histBefore(hist, dy.time[0]);
+    const mean = (mx, mn) => (mx + mn) / 2;
+    const ms = past.slice(-5).map((x) => mean(x.mx, x.mn));
+    for (let k = 0; k < 2 && k < dy.time.length; k++) if (dy.temperature_2m_max[k] != null && dy.temperature_2m_min[k] != null) ms.push(mean(dy.temperature_2m_max[k], dy.temperature_2m_min[k]));
+    const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 10;
+    const cat = iceCategory(past);
+    // авто: подлёдная при морозах, а также когда лёд, по оценке, уже встал (оттепель среди зимы режим не меняет)
+    const ice = mode === 'ice' || (mode === 'auto' && (avg <= -5 || cat === 'check' || cat === 'ok'));
+    const yMax = past.length ? past[past.length - 1].mx : -99;
+    return { ice: ice, mode: mode, avg: avg, cat: cat, yMax: yMax };
+  }
+  const thawOf = (d, ctx, i) => {
+    const mx = d.daily.temperature_2m_max;
+    return Math.max(mx[i] == null ? -99 : mx[i], i === 0 ? ctx.yMax : (mx[i - 1] == null ? -99 : mx[i - 1])) > 2;
+  };
+
+  function fishNow(d, series, ctx) {
+    ctx = ctx || fishCtx(d, null);
     const c = d.current, dy = d.daily;
     return fishScore({
+      ice: ctx.ice, iceCat: ctx.cat, thaw: ctx.ice && (thawOf(d, ctx, 0) || c.temperature_2m > 1),
       temp: c.temperature_2m, pressure: c.pressure_msl,
       dp: series.length >= 7 ? series[series.length - 1] - series[series.length - 7] : null,
       wind: c.wind_speed_10m, gust: c.wind_gusts_10m, cloud: c.cloud_cover,
@@ -259,12 +380,14 @@
       hour: hourOf(c.time), sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null
     });
   }
-  function fishDay(d, i) {
+  function fishDay(d, i, ctx) {
+    ctx = ctx || fishCtx(d, null);
     const dy = d.daily, date = dy.time[i], H = d.hourly || {};
     const at = (h) => (H.time || []).indexOf(date + 'T' + h + ':00');
     const a = at('09'), b = at('15');
     const pa = a >= 0 ? H.pressure_msl[a] : null, pb = b >= 0 ? H.pressure_msl[b] : null;
     return fishScore({
+      ice: ctx.ice, iceCat: ctx.cat, thaw: ctx.ice && thawOf(d, ctx, i),
       temp: dy.temperature_2m_min[i] + 0.4 * (dy.temperature_2m_max[i] - dy.temperature_2m_min[i]),
       pressure: pb != null ? pb : 1013, dp: pa != null && pb != null ? pb - pa : null,
       wind: (dy.wind_speed_10m_max[i] || 0) * 0.75, gust: (dy.wind_gusts_10m_max[i] || 0) * 0.85,
@@ -288,13 +411,25 @@
     const best = f.sr != null && f.ss != null
       ? '<p class="fbest">' + ic('sun', 18, 'currentColor', 1.8) + '<span>Лучшее время сегодня: ' + hm(f.sr - 1) + '–' + hm(f.sr + 2.5) + ' и ' + hm(f.ss - 2.5) + '–' + hm(f.ss + 1) + '</span></p>' : '';
     const days = f.days.map((x, i) => '<div class="fd" data-l="' + x.lvl + '"><span class="d">' + esc(x.name) + '</span><span class="fs' + (i === bw && x.score >= 50 ? ' best' : '') + '">' + x.score + '</span></div>').join('');
-    openModal('<div class="fhead" data-l="' + f.now.lvl + '">' + ringHtml(f.now.score) + '<div><h3>Клёв: ' + esc(f.now.label) + '</h3><p class="sub">' + f.now.score + ' из 100 · по погоде сейчас</p></div></div>' +
+    const ice = f.ctx.ice, md = f.ctx.mode;
+    const seg = '<div class="seg" id="segFish" role="group" aria-label="Режим рыбалки">' + [['auto', 'Авто'], ['open', 'Вода'], ['ice', 'Лёд']].map((x) => '<button type="button" data-v="' + x[0] + '" aria-pressed="' + (md === x[0]) + '">' + x[1] + '</button>').join('') + '</div>';
+    const modeTxt = (ice ? 'Подлёдная рыбалка' : 'Открытая вода') + (md === 'auto' ? ' (авто)' : '');
+    openModal('<div class="fhead" data-l="' + f.now.lvl + '">' + ringHtml(f.now.score) + '<div><h3>Клёв: ' + esc(f.now.label) + '</h3><p class="sub">' + f.now.score + ' из 100 · ' + esc(modeTxt) + '</p></div></div>' + seg +
       (f.now.warn ? '<p class="fwarn">' + ic('storm', 18, 'currentColor', 1.8) + '<span>' + esc(f.now.warn) + '</span></p>' : '') +
       '<div class="fparts">' + rows + '</div>' + best +
       '<h4 class="fh4">Лучшие дни</h4><div class="fdays">' + days + '</div>' +
-      '<p class="fnote">Это ориентир по погоде, не гарантия. Не учитываются температура и уровень воды, вид рыбы и ваша точка. Давление считается косвенным признаком: прямого научного подтверждения связи с клёвом мало, зато много наблюдений рыбаков.</p>' +
+      (ice ? '<p class="fwarn fice">' + ic('storm', 18, 'currentColor', 1.8) + '<span>Лёд в приложении только оценка по морозам последних недель. Всегда проверяйте толщину пешнёй: ходить можно от 10 см чистого льда. На реках и у течения лёд ненадёжен, мы это не учитываем. Не ходите одни.</span></p>' : '') +
+      '<p class="fnote">Это ориентир по погоде, не гарантия. Не учитываются ' + (ice ? 'реальная толщина и снег на льду, ' : 'температура и уровень воды, ') + 'вид рыбы и ваша точка. Итог строже простой суммы частей. Давление считается косвенным признаком: прямого научного подтверждения связи с клёвом мало, зато много наблюдений рыбаков.</p>' +
       '<div class="row"><button class="btn btn-primary" id="fOk" type="button">Понятно</button></div>');
     $('#fOk').onclick = closeModal;
+    $('#segFish').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { setFishMode(b.dataset.v); showFish(); }));
+  }
+  function setFishMode(v) {
+    S.fishMode = v; lsSet('fishmap.fishmode', v);
+    if (S.wxRes && sheet.classList.contains('open')) fillWeather(S.wxRes, S.wxHist);
+    if (lv.classList.contains('open')) renderListItems();
+    const sg = document.querySelector('#segFishMode');
+    if (sg) sg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.fishMode)));
   }
 
   /* ---------- weather ---------- */
@@ -346,7 +481,7 @@
       '<circle cx="' + Math.min(last[0], w - 4) + '" cy="' + last[1] + '" r="4.5" fill="var(--accent)"/></svg>';
   }
 
-  function fillWeather(res, t) {
+  function fillWeather(res, hist) {
     const d = res.data, c = d.current, dy = d.daily;
     const [icn, txt] = wmo(c.weather_code);
     const series = pressureSeries(d), tr = trend(series);
@@ -361,16 +496,17 @@
       (res.stale ? '<div class="stale">' + ic('cloud_off', 18, 'currentColor', 2) + '<span>Нет сети, данные от ' + hhmm(res.t) + '</span></div>' : '');
 
     $('#miniWx').innerHTML = ic(icn, 22, 'currentColor', 1.8) + fmtT(c.temperature_2m);
-    const fnow = fishNow(d, series);
+    const fctx = fishCtx(d, hist);
+    const fnow = fishNow(d, series, fctx);
     const fdays = dy.time.map((tm, i) => {
-      const fd = fishDay(d, i);
+      const fd = fishDay(d, i, fctx);
       return { name: i === 0 ? 'Сегодня' : new Date(tm + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' }), score: fd.score, lvl: fd.lvl };
     });
-    S.fish = { now: fnow, days: fdays, sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null };
+    S.fish = { now: fnow, ctx: fctx, days: fdays, sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null };
     let bestDay = -1;
     fdays.forEach((x, i) => { if (x.score >= 50 && (bestDay < 0 || x.score > fdays[bestDay].score)) bestDay = i; });
     $('#wxFish').innerHTML = '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
-      ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(fnow.warn || 'По погоде · почему такая оценка') + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
+      ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(fnow.warn || ((fctx.ice ? 'Подлёдная' : 'Открытая вода') + ' · почему такая оценка')) + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     $('#bFish').addEventListener('click', showFish);
     $('#miniFish').innerHTML = '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>';
 
@@ -403,7 +539,7 @@
   async function loadWeather(t) {
     const key = (t.id || 'temp') + ':' + t.lat + ',' + t.lon;
     S.wxKey = key;
-    const res = await getWeather(t.lat, t.lon);
+    const [res, hist] = await Promise.all([getWeather(t.lat, t.lon), getHistory(t.lat, t.lon).catch(() => null)]);
     if (S.wxKey !== key) return;
     if (!res) {
       $('#wxNow').innerHTML = '<div class="err">' + ic('cloud_off', 24, 'currentColor', 1.8) + '<span>Нет сети и нет сохранённой погоды для этого места. Откройте карту с интернетом один раз.</span></div>';
@@ -412,7 +548,8 @@
       layoutSheet();
       return;
     }
-    fillWeather(res, t);
+    S.wxRes = res; S.wxHist = hist;
+    fillWeather(res, hist);
   }
 
   /* ---------- bottom sheet ---------- */
@@ -712,11 +849,11 @@
     box.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
       const s = findSpot(c.dataset.id); closeList(); openSpot(s.id, 'half');
     }));
-    arr.forEach((s) => getWeather(s.lat, s.lon).then((r) => {
+    arr.forEach((s) => Promise.all([getWeather(s.lat, s.lon), getHistory(s.lat, s.lon).catch(() => null)]).then(([r, hs]) => {
       const el = box.querySelector('[data-w="' + s.id + '"]'); if (!el || !r) return;
       const c = r.data.current;
       let fs = null;
-      try { fs = fishNow(r.data, pressureSeries(r.data)); } catch (e) { /* нет данных для оценки */ }
+      try { fs = fishNow(r.data, pressureSeries(r.data), fishCtx(r.data, hs)); } catch (e) { /* нет данных для оценки */ }
       el.innerHTML = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч' +
         (fs ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
     }));
@@ -745,6 +882,7 @@
     menu.innerHTML =
       '<h4>Слой карты</h4><div class="seg" id="segLayer"><button type="button" data-v="osm">Карта</button><button type="button" data-v="topo">Топо</button></div>' +
       '<h4>Тема</h4><div class="seg" id="segTheme"><button type="button" data-v="auto">Авто</button><button type="button" data-v="light">Светлая</button><button type="button" data-v="dark">Тёмная</button></div>' +
+      '<h4>Рыбалка</h4><div class="seg" id="segFishMode"><button type="button" data-v="auto">Авто</button><button type="button" data-v="open">Вода</button><button type="button" data-v="ice">Лёд</button></div>' +
       '<h4>Группа</h4><div id="grp" class="grp"></div>' +
       '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Без интернета карта показывает те места, которые вы уже смотрели с интернетом. Откройте нужные озёра и реки по Wi-Fi заранее.</p>' +
       '<button class="linkbtn" id="bUpdate" type="button">Обновить приложение <span id="ver"></span></button>';
@@ -752,9 +890,11 @@
     const sync = () => {
       menu.querySelectorAll('#segLayer button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.layer)));
       menu.querySelectorAll('#segTheme button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.theme)));
+      menu.querySelectorAll('#segFishMode button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.fishMode)));
     };
     sync();
     menu.querySelectorAll('#segLayer button').forEach((b) => b.addEventListener('click', () => { setLayer(b.dataset.v); sync(); }));
+    menu.querySelectorAll('#segFishMode button').forEach((b) => b.addEventListener('click', () => { setFishMode(b.dataset.v); sync(); }));
     menu.querySelectorAll('#segTheme button').forEach((b) => b.addEventListener('click', () => { S.theme = b.dataset.v; lsSet('fishmap.theme', S.theme); applyTheme(); sync(); }));
     renderGroup();
     if ('caches' in window) caches.keys().then((ks) => { const k = ks.find((x) => /shell/.test(x)), el = $('#ver'); if (k && el) el.textContent = '(' + k.replace('fishmap-shell-', '') + ')'; }).catch(() => {});
