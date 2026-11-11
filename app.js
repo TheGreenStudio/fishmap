@@ -91,10 +91,14 @@
   applyTheme();
 
   /* ---------- map ---------- */
-  const map = L.map('map', { zoomControl: false, attributionControl: true, tap: true });
+  const WORLD = L.latLngBounds([[-85, -180], [85, 180]]);
+  const map = L.map('map', { zoomControl: false, attributionControl: true, tap: true, maxBounds: WORLD, maxBoundsViscosity: 1 });
+  // нельзя отдалиться дальше, чем мир заполняет экран: иначе карта повторяется и вокруг пустота
+  const fitMinZoom = () => { try { map.setMinZoom(Math.max(2, map.getBoundsZoom(WORLD, true))); } catch (e) { /* размер ещё неизвестен */ } };
+  map.on('resize', fitMinZoom);
   const layers = {
-    osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }),
-    topo: L.tileLayer('https://tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenTopoMap, © OpenStreetMap' })
+    osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, noWrap: true, attribution: '© OpenStreetMap' }),
+    topo: L.tileLayer('https://tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, noWrap: true, attribution: '© OpenTopoMap, © OpenStreetMap' })
   };
   function setLayer(k) {
     Object.keys(layers).forEach((n) => { if (map.hasLayer(layers[n])) map.removeLayer(layers[n]); });
@@ -1293,6 +1297,7 @@
     try { const r = await fetch('spots.json', { cache: 'no-cache' }); cfg = await r.json(); } catch (e) {}
     S.shared = (cfg.spots || []).map((s) => Object.assign({}, s, { shared: true, created: s.created || 0 }));
     S.shared.forEach((s) => { if (!findSpot(s.id)) S.spots.push(s); });
+    fitMinZoom();
     map.setView(cfg.center || [51.0447, -114.0719], cfg.zoom || 10);
     renderMarkers();
     if (S.spots.length > 1) map.fitBounds(L.latLngBounds(S.spots.map((s) => [s.lat, s.lon])).pad(0.25));
