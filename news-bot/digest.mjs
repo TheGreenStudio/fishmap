@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { fishCtx, fishDay } from './fishscore.mjs';
-import { norm, SECTIONS, MUST, STRONG, TRAVEL, BLOCK, sameStory, alreadySent, cleanSummary } from './filters.mjs';
+import { norm, SECTIONS, passesFilters, alreadySent, cleanSummary, extractMeta, pageMatchesTitle, pickWithSummary } from './filters.mjs';
 
 // Альберта с ноября 2026 живёт на постоянном летнем времени (UTC-6 круглый год).
 // Версия базы часовых поясов на раннере GitHub (Node 20) об этом не знает и считала бы время на час раньше
@@ -128,23 +128,20 @@ export async function pickNews(section, state, used) {
   const cutoff = Date.now() - section.days * 864e5;
   const found = [...all.values()]
     .filter((i) => i.date.getTime() >= cutoff
-      && MUST.test(i.title) && STRONG.test(i.title)
-      && !BLOCK.test(i.title) && !TRAVEL.test(i.title)
-      && section.region.test(`${i.title} ${i.source}`)
+      && passesFilters(section, i)
       && !alreadySent(i.title, state.sent.map((x) => x.t)) && !alreadySent(i.title, [...used]))
     .sort((a, b) => b.date - a.date);
   console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
   // Для настройки фильтров: в пробном запуске показываем, из чего выбирали.
   if (DRY) for (const f of found.slice(0, 6)) console.log(`   - ${f.date.toISOString().slice(0, 10)} | ${f.source} | ${f.title}`);
 
-  // Берём самую свежую новость, к которой удалось получить краткое описание со страницы статьи.
-  // Если ни к одной не удалось, остаётся самая свежая, но только с заголовком.
-  const top = found.slice(0, 3);
+  // Берём самую свежую новость, к которой удалось получить краткое описание со страницы статьи
+  // (не старше самой свежей более чем на 5 дней). Если описаний нет совсем, остаётся самая свежая с заголовком.
+  const top = found.slice(0, 4);
   await Promise.all(top.map(async (f) => { f.summary = await fetchSummary(f); }));
-  const best = top.find((f) => f.summary);
-  if (best) return best;
-  if (top[0]) console.log(`${section.title}: описание получить не удалось, будет только заголовок`);
-  return top[0] || null;
+  const best = pickWithSummary(top, 5);
+  if (best && !best.summary) console.log(`${section.title}: описание получить не удалось, будет только заголовок`);
+  return best;
 }
 
 // ---------- краткое описание статьи ----------
@@ -199,14 +196,13 @@ async function fetchSummary(item) {
   try {
     const url = await resolveGoogleLink(item.link);
     const html = (await tryFetch(url)).slice(0, 400000);
-    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]);
-    const pick = (re) => {
-      const t = metas.find((x) => re.test(x));
-      return t?.match(/content\s*=\s*"([^"]*)"/i)?.[1] || t?.match(/content\s*=\s*'([^']*)'/i)?.[1] || '';
-    };
-    const raw = pick(/(property|name)\s*=\s*["']og:description["']/i)
-      || pick(/name\s*=\s*["']description["']/i)
-      || pick(/name\s*=\s*["']twitter:description["']/i);
+    const meta = extractMeta(html);
+    // Страница-заглушка, главная или окно с cookie: заголовок не совпадает с нашей новостью.
+    if (!pageMatchesTitle(meta.title, item.title)) {
+      console.log(`   описание: пропущено, страница не про эту новость (${new URL(url).hostname})`);
+      return '';
+    }
+    const raw = meta.description;
     const s = cleanSummary(raw, item.title);
     console.log(`   описание: ${s ? 'получено' : 'пустое'} (${new URL(url).hostname})`);
     return s;
