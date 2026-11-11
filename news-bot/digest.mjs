@@ -26,6 +26,9 @@ const FORCE = E.FORCE === '1';
 const SAVE = E.SAVE_STATE === '1';
 const STATE_FILE = E.STATE_FILE || 'news-bot/state.json';
 const FIXTURES = E.FIXTURE_DIR || '';
+// Логи запусков в публичном репозитории видны всем, а названия наших точек не для чужих глаз.
+// Поэтому в пробных запусках (и в ошибках) названия точек в лог не попадают. Локально с фикстурами показываем как есть.
+const MASK_SPOTS = E.MASK_SPOTS ? E.MASK_SPOTS === '1' : !FIXTURES;
 
 
 // ---------- вспомогательное ----------
@@ -308,20 +311,21 @@ async function spotsBlock() {
   if (!inSeason.length) return null;
 
   const scored = [];
-  for (const sp of inSeason) {
+  for (const [n, sp] of inSeason.entries()) {
     try {
       const [w, h] = await Promise.all([wxFor(sp.lat, sp.lon), histFor(sp.lat, sp.lon)]);
       const ctx = fishCtx(w, h);          // режим каждой точки по её координатам, как в приложении
       const r = fishDay(w, 0, ctx);
       scored.push({ name: sp.name, ...r, ice: ctx.ice });
-    } catch (e) { console.error(`Клёв: точка «${sp.name}» пропущена (${e.message})`); }
+    } catch (e) { console.error(`Клёв: точка №${n + 1} пропущена (${e.message})`); }
   }
   if (!scored.length) return null;
   scored.sort((a, b) => b.score - a.score);
   const top = scored.slice(0, 3);
-  if (DRY) for (const t of scored) console.log(`   - ${t.score} | ${t.name}${t.warn ? ' | ' + t.warn : ''}`);
+  if (DRY) for (const [i, t] of scored.entries()) console.log(`   - ${t.score} | ${MASK_SPOTS ? 'точка ' + (i + 1) : t.name}${t.warn ? ' | ' + t.warn : ''}`);
 
-  const lines = top.map((t, i) => `${i + 1}. ${esc(t.name)}: ${t.score} из 100, ${t.label}`);
+  const lines = top.map((t, i) => `${i + 1}. ${DRY && MASK_SPOTS ? 'точка ' + (i + 1) : esc(t.name)}: ${t.score} из 100, ${t.label}`);
+  if (DRY && MASK_SPOTS) console.log('В пробном запуске названия точек скрыты: логи публичные.');
   const head = lines.length >= 3 ? 'Топ 3 точки' : lines.length === 2 ? 'Топ 2 точки' : 'Лучшая точка';
   let out = `<b>${head}</b> (${winter ? 'зима, подлёдная рыбалка' : 'лето, открытая вода'}):\n${lines.join('\n')}`;
   if (top[0].warn) out += `\n${esc(top[0].warn)}.`;
