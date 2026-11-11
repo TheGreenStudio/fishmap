@@ -1,5 +1,5 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v9';
+const SHELL = 'fishmap-shell-v10';
 const TILES = 'fishmap-tiles-v1';
 const PHOTOS = 'fishmap-photos-v1'; // фото из группы, их нельзя удалять при обновлении
 const MAX_TILES = 3000;
@@ -13,7 +13,10 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache: 'reload' обходит HTTP-кэш браузера (GitHub Pages держит файлы до 10 минут), иначе в кэш попадала бы устаревшая копия
+  e.waitUntil(caches.open(SHELL)
+    .then((c) => Promise.all(ASSETS.map((a) => fetch(new Request(a, { cache: 'reload' })).then((r) => { if (!r.ok) throw new Error(a + ' ' + r.status); return c.put(a, r); }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -48,7 +51,7 @@ async function tileHandler(request) {
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(SHELL);
   const hit = await cache.match(request, { ignoreSearch: true });
-  const net = fetch(request).then((res) => { if (res && res.ok) cache.put(request, res.clone()); return res; }).catch(() => null);
+  const net = fetch(request.url, { cache: 'no-cache' }).then((res) => { if (res && res.ok) cache.put(request, res.clone()); return res; }).catch(() => null);
   if (hit) return hit;
   const res = await net;
   return res || (await cache.match('./index.html')) || new Response('Нет сети', { status: 503 });

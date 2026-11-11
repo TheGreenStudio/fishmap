@@ -723,7 +723,8 @@
       '<h4>Тема</h4><div class="seg" id="segTheme"><button type="button" data-v="auto">Авто</button><button type="button" data-v="light">Светлая</button><button type="button" data-v="dark">Тёмная</button></div>' +
       '<h4>Группа</h4><div id="grp" class="grp"></div>' +
       '<button class="btn btn-secondary" id="bOffline" type="button" style="width:100%;flex:none;height:48px;font-size:15px">' + ic('download', 20) + '<span id="offTxt">Сохранить карту для офлайна</span></button>' +
-      '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Офлайн сохраняются плитки вокруг ваших точек для выбранного слоя. Делайте это по Wi-Fi.</p>';
+      '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Офлайн сохраняются плитки вокруг ваших точек для выбранного слоя. Делайте это по Wi-Fi.</p>' +
+      '<button class="linkbtn" id="bUpdate" type="button">Обновить приложение <span id="ver"></span></button>';
     menu.hidden = false; $('#bLayers').classList.add('on');
     const sync = () => {
       menu.querySelectorAll('#segLayer button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.layer)));
@@ -734,6 +735,14 @@
     menu.querySelectorAll('#segTheme button').forEach((b) => b.addEventListener('click', () => { S.theme = b.dataset.v; lsSet('fishmap.theme', S.theme); applyTheme(); sync(); }));
     renderGroup();
     $('#bOffline').addEventListener('click', downloadOffline);
+    if ('caches' in window) caches.keys().then((ks) => { const k = ks.find((x) => /shell/.test(x)), el = $('#ver'); if (k && el) el.textContent = '(' + k.replace('fishmap-shell-', '') + ')'; }).catch(() => {});
+    $('#bUpdate').addEventListener('click', async () => {
+      try {
+        if ('serviceWorker' in navigator) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((r) => r.unregister())); }
+        if ('caches' in window) { const ks = await caches.keys(); await Promise.all(ks.filter((k) => /shell/.test(k)).map((k) => caches.delete(k))); }
+      } catch (e) { /* всё равно перезагружаем */ }
+      location.reload();
+    });
   }
   $('#bLayers').addEventListener('click', (e) => { e.stopPropagation(); menu.hidden ? openMenu() : closeMenu(); });
   document.addEventListener('pointerdown', (e) => {
@@ -1284,6 +1293,15 @@
     checkJoin(); checkHash();
     window.addEventListener('hashchange', () => { checkJoin(); checkHash(); });
     if (S.code) syncNow();
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator) {
+      const hadCtl = !!navigator.serviceWorker.controller; let reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadCtl || reloaded) return;
+        const a = document.activeElement, typing = a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT');
+        if (typing || !$('#modal').hidden) { toast('Вышла новая версия, она применится при следующем открытии'); return; }
+        reloaded = true; location.reload();
+      });
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
   })();
 })();
