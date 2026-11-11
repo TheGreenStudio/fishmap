@@ -1,5 +1,5 @@
 # Ежедневная сводка в Telegram-группу «Дикая Рыбалка»: погода в Calgary + новости.
-# Секреты (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+# Секреты (Settings -> Secrets and variables -> Actions): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SUPABASE_GROUP_CODE.
 # Чтобы переключить с тестового чата на группу, достаточно заменить TELEGRAM_CHAT_ID.
 name: daily-digest
 on:
@@ -45,6 +45,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Код группы нужен, чтобы прочитать наши точки из Supabase (блок «Клёв по нашим точкам»).
+          SUPABASE_GROUP_CODE: ${{ secrets.SUPABASE_GROUP_CODE }}
           # Ручной запуск всегда обходит проверку времени; плановый её соблюдает.
           FORCE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}

@@ -6,12 +6,14 @@
 //
 // Переменные окружения:
 //   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  куда отправлять (секреты GitHub)
+//   SUPABASE_GROUP_CODE  код группы для чтения наших точек (секрет GitHub); без него блок «Клёв» пропускается
 //   DRY_RUN=1     только напечатать сообщение, ничего не отправлять
 //   FORCE=1       игнорировать проверку времени и «уже отправляли сегодня»
 //   SAVE_STATE=1  запомнить отправленные новости и дату (для боевых запусков)
 //   FIXTURE_DIR   для локальных тестов: брать данные из файлов вместо сети
 
 import fs from 'node:fs';
+import { fishCtx, fishDay } from './fishscore.mjs';
 
 const TZ = 'America/Edmonton';
 const LAT = 51.0447;
@@ -67,13 +69,13 @@ const ruDay = (ymd) =>
   new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', day: 'numeric', month: 'long' })
     .format(new Date(`${ymd}T12:00:00Z`));
 
-async function getText(url, fixture) {
+async function getText(url, fixture, headers = {}) {
   if (FIXTURES) return fs.readFileSync(`${FIXTURES}/${fixture}`, 'utf8');
   let lastErr;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const r = await fetch(url, {
-        headers: { 'user-agent': 'Mozilla/5.0 (compatible; WildFishingDigest/1.0)' },
+        headers: { 'user-agent': 'Mozilla/5.0 (compatible; WildFishingDigest/1.0)', ...headers },
         signal: AbortSignal.timeout(20000),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -198,6 +200,86 @@ async function weatherBlock(today) {
   return `<b>Погода.</b> ${parts.join(' ')}`;
 }
 
+// ---------- клёв по нашим точкам ----------
+
+const SB_URL = 'https://caxuvdrzuurhdtmqbkbg.supabase.co';
+const SB_KEY = 'sb_publishable_gS7j7lRfJV5rz-nr6AzV7g_Q9lfGNzt'; // публичный ключ, как в приложении
+const MAP_CENTER = { lat: LAT, lon: LON };                       // центр карты (по нему приложение выбирает сезон)
+
+async function loadSpots() {
+  const code = E.SUPABASE_GROUP_CODE;
+  if (!code && !FIXTURES) throw new Error('не задан секрет SUPABASE_GROUP_CODE');
+  const headers = { apikey: SB_KEY, 'x-group-code': code || '' };
+  let rows = [];
+  if (FIXTURES) rows = JSON.parse(fs.readFileSync(`${FIXTURES}/spots_db.json`, 'utf8'));
+  else {
+    const chk = await fetch(`${SB_URL}/rest/v1/rpc/group_check`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000),
+    });
+    if (!chk.ok || (await chk.json()) !== true) throw new Error('код группы не подошёл');
+    rows = JSON.parse(await getText(`${SB_URL}/rest/v1/spots?select=*&order=created_at.asc`, '', headers));
+  }
+  // точки из spots.json в репозитории считаются «Оба сезона»
+  try {
+    const shared = JSON.parse(fs.readFileSync(new URL('../spots.json', import.meta.url), 'utf8')).spots || [];
+    for (const sp of shared) if (!rows.some((r) => r.id === sp.id)) rows.push({ ...sp, season: 'both' });
+  } catch { /* файла может не быть */ }
+  return rows.filter((r) => r && r.name && Number.isFinite(r.lat) && Number.isFinite(r.lon));
+}
+
+const wxCache = new Map();
+const wxFor = (lat, lon) => {
+  const k = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  if (!wxCache.has(k)) {
+    wxCache.set(k, getText('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(2) + '&longitude=' + lon.toFixed(2)
+      + '&hourly=pressure_msl&past_hours=24'
+      + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset'
+      + '&forecast_days=4&timezone=auto&wind_speed_unit=kmh', 'spotwx.json').then(JSON.parse));
+  }
+  return wxCache.get(k);
+};
+const histCache = new Map();
+const histFor = (lat, lon) => {
+  const k = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+  if (!histCache.has(k)) {
+    histCache.set(k, getText('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(1) + '&longitude=' + lon.toFixed(1)
+      + '&daily=temperature_2m_max,temperature_2m_min&past_days=30&forecast_days=1&timezone=auto', 'hist.json')
+      .then((t) => { const j = JSON.parse(t); return { time: j.daily.time, tmax: j.daily.temperature_2m_max, tmin: j.daily.temperature_2m_min }; }));
+  }
+  return histCache.get(k);
+};
+
+async function spotsBlock() {
+  const spots = await loadSpots();
+  // сезон карты: как «Авто» в приложении, по погоде и морозам в центре карты
+  const [cw, ch] = await Promise.all([wxFor(MAP_CENTER.lat, MAP_CENTER.lon), histFor(MAP_CENTER.lat, MAP_CENTER.lon)]);
+  const winter = fishCtx(cw, ch).autoIce;
+  const season = winter ? 'winter' : 'summer';
+  const inSeason = spots.filter((s) => { const q = s.season || 'summer'; return q === 'both' || q === season; });
+  console.log(`Клёв: точек всего ${spots.length}, в сезоне «${winter ? 'зима' : 'лето'}» ${inSeason.length}`);
+  if (!inSeason.length) return null;
+
+  const scored = [];
+  for (const sp of inSeason) {
+    try {
+      const [w, h] = await Promise.all([wxFor(sp.lat, sp.lon), histFor(sp.lat, sp.lon)]);
+      const ctx = fishCtx(w, h);          // режим каждой точки по её координатам, как в приложении
+      const r = fishDay(w, 0, ctx);
+      scored.push({ name: sp.name, ...r, ice: ctx.ice });
+    } catch (e) { console.error(`Клёв: точка «${sp.name}» пропущена (${e.message})`); }
+  }
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, 3);
+  if (DRY) for (const t of scored) console.log(`   - ${t.score} | ${t.name}${t.warn ? ' | ' + t.warn : ''}`);
+
+  const lines = top.map((t, i) => `${i + 1}. ${esc(t.name)}: ${t.score} из 100, ${t.label}`);
+  let out = `<b>Клёв по нашим точкам</b> (${winter ? 'зима, подлёдная рыбалка' : 'лето, открытая вода'}):\n${lines.join('\n')}`;
+  if (top[0].warn) out += `\n${esc(top[0].warn)}.`;
+  if (winter) out += '\nЛёд оценивается только по погоде, толщину проверяйте сами.';
+  return out;
+}
+
 // ---------- отправка ----------
 
 async function sendTelegram(text) {
@@ -238,6 +320,11 @@ async function main() {
 
   try { blocks.push(await weatherBlock(today)); }
   catch (e) { console.error(`Погода недоступна: ${e.message}`); }
+
+  try {
+    const sb = await spotsBlock();
+    if (sb) blocks.push(sb);
+  } catch (e) { console.error(`Клёв по точкам недоступен: ${e.message}`); }
 
   const used = new Set();
   for (const s of SECTIONS) {
