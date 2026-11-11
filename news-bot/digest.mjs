@@ -146,13 +146,111 @@ async function pickNews(section, state, used) {
   console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
   // Для настройки фильтров: в пробном запуске показываем, из чего выбирали.
   if (DRY) for (const f of found.slice(0, 6)) console.log(`   - ${f.date.toISOString().slice(0, 10)} | ${f.source} | ${f.title}`);
-  return found[0] || null;
+
+  // Берём самую свежую новость, к которой удалось получить краткое описание со страницы статьи.
+  // Если ни к одной не удалось, остаётся самая свежая, но только с заголовком.
+  const top = found.slice(0, 4);
+  for (const f of top) {
+    f.summary = await fetchSummary(f);
+    if (f.summary) return f;
+  }
+  if (top[0]) console.log(`${section.title}: описание получить не удалось, будет только заголовок`);
+  return top[0] || null;
+}
+
+// ---------- краткое описание статьи ----------
+
+const entities = (s) => s
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  .replace(/&(rsquo|lsquo|#8217);/g, "'").replace(/&(ldquo|rdquo);/g, '"')
+  .replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
+async function tryFetch(url, init = {}) {
+  const r = await fetch(url, {
+    ...init,
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'accept-language': 'en-CA,en;q=0.9',
+      ...(init.headers || {}),
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+}
+
+// Ссылка из Google News ведёт на редирект. Достаём адрес настоящей статьи.
+async function resolveGoogleLink(link) {
+  const m = link.match(/\/articles\/([^?/]+)/);
+  if (!m) return link;
+  const id = m[1];
+  // Старый формат: адрес статьи лежит прямо в base64.
+  try {
+    const bin = Buffer.from(id.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('latin1');
+    const u = bin.match(/https?:\/\/[\x21-\x7e]+/);
+    if (u) return u[0];
+  } catch { /* дальше */ }
+  // Новый формат: спрашиваем у самого Google.
+  const page = await tryFetch(`https://news.google.com/rss/articles/${id}?hl=en-CA&gl=CA&ceid=CA:en`);
+  const sg = page.match(/data-n-a-sg="([^"]+)"/)?.[1];
+  const ts = page.match(/data-n-a-ts="([^"]+)"/)?.[1];
+  if (!sg || !ts) throw new Error('нет параметров ссылки');
+  const inner = `["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"${id}",${ts},"${sg}"]`;
+  const body = 'f.req=' + encodeURIComponent(JSON.stringify([[['Fbv4je', inner, null, 'generic']]]));
+  const resp = await tryFetch('https://news.google.com/_/DotsSplashUi/data/batchexecute', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body,
+  });
+  const arr = JSON.parse(resp.split('\n\n')[1]);
+  const url = JSON.parse(arr[0][2])[1];
+  if (!/^https?:\/\//.test(url)) throw new Error('не получили адрес статьи');
+  return url;
+}
+
+function cleanSummary(raw, title) {
+  let s = entities(raw).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (s.length < 50) return '';
+  if (/cookie|subscribe|sign in|log in|javascript|enable|all rights reserved/i.test(s)) return '';
+  // Описание, которое просто повторяет заголовок, ничего не добавляет.
+  if (norm(s).startsWith(norm(title).slice(0, 40)) && s.length < title.length + 40) return '';
+  if (s.length > 260) {
+    const cut = s.slice(0, 260);
+    const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+    s = end > 100 ? cut.slice(0, end + 1) : cut.slice(0, cut.lastIndexOf(' ')) + '…';
+  }
+  return s;
+}
+
+async function fetchSummary(item) {
+  if (FIXTURES) return '';
+  try {
+    const url = await resolveGoogleLink(item.link);
+    const html = (await tryFetch(url)).slice(0, 400000);
+    const metas = [...html.matchAll(/<meta\b[^>]*>/gi)].map((m) => m[0]);
+    const pick = (re) => {
+      const t = metas.find((x) => re.test(x));
+      return t?.match(/content\s*=\s*"([^"]*)"/i)?.[1] || t?.match(/content\s*=\s*'([^']*)'/i)?.[1] || '';
+    };
+    const raw = pick(/(property|name)\s*=\s*["']og:description["']/i)
+      || pick(/name\s*=\s*["']description["']/i)
+      || pick(/name\s*=\s*["']twitter:description["']/i);
+    const s = cleanSummary(raw, item.title);
+    console.log(`   описание: ${s ? 'получено' : 'пустое'} (${new URL(url).hostname})`);
+    return s;
+  } catch (e) {
+    console.error(`   описание не получено (${e.message})`);
+    return '';
+  }
 }
 
 function newsBlock(section, item) {
   const when = ruLocal(item.date, { day: 'numeric', month: 'long' });
   const src = item.source ? `${esc(item.source)}, ${when}` : when;
-  return `<b>${section.title}.</b> «<a href="${esc(item.link)}">${esc(item.title)}</a>» (${src})`;
+  const head = `<b>${section.title}.</b> «<a href="${esc(item.link)}">${esc(item.title)}</a>» (${src})`;
+  return item.summary ? `${head}\n${esc(item.summary)}` : head;
 }
 
 // ---------- погода ----------
