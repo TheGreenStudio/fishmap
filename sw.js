@@ -1,5 +1,5 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v4';
+const SHELL = 'fishmap-shell-v5';
 const TILES = 'fishmap-tiles-v1';
 const MAX_TILES = 3000;
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tile.opentopomap.org'];

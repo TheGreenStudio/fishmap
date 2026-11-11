@@ -346,6 +346,7 @@
       '<div class="desc"><span>' + esc(txt) + '</span><span>Ощущается ' + fmtT(c.apparent_temperature) + '</span></div></div>' +
       (res.stale ? '<div class="stale">' + ic('cloud_off', 18, 'currentColor', 2) + '<span>Нет сети, данные от ' + hhmm(res.t) + '</span></div>' : '');
 
+    $('#miniWx').innerHTML = ic(icn, 22, 'currentColor', 1.8) + fmtT(c.temperature_2m);
     const fnow = fishNow(d, series);
     const fdays = dy.time.map((tm, i) => {
       const fd = fishDay(d, i);
@@ -357,6 +358,7 @@
     $('#wxFish').innerHTML = '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
       ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(fnow.warn || 'По погоде · почему такая оценка') + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     $('#bFish').addEventListener('click', showFish);
+    $('#miniFish').innerHTML = '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>';
 
     $('#wxChips').innerHTML =
       '<span class="chip">' + ic('wind', 18) + rnd(c.wind_speed_10m) + ' км/ч</span>' +
@@ -401,7 +403,7 @@
 
   /* ---------- bottom sheet ---------- */
   const sheet = $('#sheet'), body = $('#sheetBody'), scroll = $('#scroll'), grab = $('#grab');
-  let heights = { peek: 280, half: 560, full: 760 };
+  let heights = { mini: 96, peek: 280, half: 560, full: 760 };
 
   const curTarget = () => {
     if (S.sel) { const s = findSpot(S.sel); if (s) return Object.assign({ kind: 'spot' }, s); }
@@ -409,27 +411,38 @@
     return null;
   };
   const maxFull = () => window.innerHeight - 64 - (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-t')) || 0);
-  function allowedStates() { return sheet.dataset.kind === 'spot' ? ['peek', 'half', 'full'] : ['peek', 'half']; }
+  function allowedStates() { return sheet.dataset.kind === 'spot' ? ['mini', 'peek', 'half', 'full'] : ['mini', 'peek', 'half']; }
+  const nextState = () => { const al = allowedStates().filter((k) => k !== 'mini'); return S.state === 'mini' ? 'peek' : al[(al.indexOf(S.state) + 1) % al.length]; };
+  function safeBottom() {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;bottom:0;visibility:hidden;padding-bottom:env(safe-area-inset-bottom,0px)';
+    document.body.appendChild(d);
+    const v = parseFloat(getComputedStyle(d).paddingBottom) || 0;
+    d.remove(); return v;
+  }
 
   function measure() {
     const chips = $('#wxChips'), actions = $('#actions');
     if (!chips || !actions) return;
-    const wasExp = sheet.classList.contains('expanded');
-    sheet.classList.remove('expanded');
+    const wasExp = sheet.classList.contains('expanded'), wasMini = sheet.classList.contains('is-mini');
+    sheet.classList.remove('expanded', 'is-mini');
     const peek = grab.offsetHeight + chips.offsetTop + Math.max(chips.offsetHeight, 36) + 6 + actions.offsetHeight;
     sheet.classList.add('expanded');
     const spark = $('#wxSpark'), fc = $('#wxForecast');
     const endEl = spark && spark.offsetHeight ? spark : fc;
     const halfNeed = grab.offsetHeight + (endEl ? endEl.offsetTop + endEl.offsetHeight : 0) + 12 + actions.offsetHeight;
     sheet.classList.toggle('expanded', wasExp);
+    sheet.classList.toggle('is-mini', wasMini);
+    const mini = grab.offsetHeight + 56 + 10 + safeBottom();
     const full = maxFull();
     const half = clamp(rnd(halfNeed), peek + 80, full);
-    heights = { peek: Math.min(peek, full), half: half, full: full };
+    heights = { mini: mini, peek: Math.min(peek, full), half: half, full: full };
   }
   function applyState(st, instant) {
     S.state = st;
-    sheet.classList.toggle('expanded', st !== 'peek');
+    sheet.classList.toggle('expanded', st === 'half' || st === 'full');
     sheet.classList.toggle('is-full', st === 'full');
+    sheet.classList.toggle('is-mini', st === 'mini');
     if (instant) sheet.classList.add('dragging');
     sheet.style.setProperty('--h', heights[st] + 'px');
     if (instant) { sheet.offsetHeight; sheet.classList.remove('dragging'); }
@@ -467,9 +480,13 @@
     sheet.dataset.kind = t.kind;
     sheet.classList.add('open');
     document.body.classList.add('sheet-open');
+    const ttl = esc(saved ? t.name : 'Новая точка');
     body.innerHTML =
+      '<div id="miniRow" class="mini"><button class="mini-main" id="bExpand" type="button" aria-label="Развернуть панель"><span id="miniWx" class="mini-wx"></span><span class="mini-title">' + ttl + '</span><span id="miniFish"></span>' + ic('chev_r', 20, 'currentColor', 2, 'transform:rotate(-90deg);color:var(--muted)') + '</button>' +
+      '<button class="icon-btn" id="bClose" type="button" aria-label="Закрыть">' + ic('x', 20, 'currentColor', 2) + '</button></div>' +
       '<div class="head"><div class="titlecol"><h2 class="title">' + esc(saved ? t.name : 'Новая точка') + '</h2><div class="sub">' + subText(t, saved) + '</div></div>' +
-      (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') + '</div>' +
+      '<div class="hbtns">' + (saved ? '<button class="icon-btn" id="bMore" type="button" aria-label="Ещё">' + ic('dots', 22) + '</button>' : '<span class="tag tag-accent">Не сохранена</span>') +
+      '<button class="icon-btn" id="bCollapse" type="button" aria-label="Свернуть погоду">' + ic('chev_r', 22, 'currentColor', 2, 'transform:rotate(90deg)') + '</button></div></div>' +
       '<div id="wxNow" class="wxnow"><div class="skel" style="height:44px;width:70%;margin-bottom:8px"></div><div class="skel" style="height:14px;width:45%"></div></div>' +
       '<div id="wxFish"></div>' +
       '<div id="wxChips" class="chips"><span class="skel" style="height:36px;width:110px;border-radius:18px"></span><span class="skel" style="height:36px;width:90px;border-radius:18px"></span><span class="skel" style="height:36px;width:80px;border-radius:18px"></span></div>' +
@@ -479,6 +496,9 @@
         ? '<a class="btn btn-primary" href="' + routeUrl(t) + '" target="_blank" rel="noopener">' + ic('nav', 20) + 'Маршрут</a><a class="btn btn-secondary" href="' + tgUrl(t) + '" target="_blank" rel="noopener">' + ic('send', 20) + 'В Telegram</a>'
         : '<button class="btn btn-primary" id="bSave" type="button">' + ic('bookmark', 20) + 'Сохранить точку</button><a class="icon-btn sq" href="' + routeUrl(t) + '" target="_blank" rel="noopener" aria-label="Маршрут">' + ic('nav', 22) + '</a>') +
       '</div>';
+    $('#bCollapse').addEventListener('click', () => { applyState('mini'); setTimeout(focusTarget, 60); });
+    $('#bExpand').addEventListener('click', () => { applyState('peek'); setTimeout(focusTarget, 60); });
+    $('#bClose').addEventListener('click', closeSheet);
     if (saved) {
       $('#bMore').addEventListener('click', () => moreMenu(t));
       const ta = $('#descr');
@@ -516,7 +536,7 @@
       if (!dragging) return;
       if (Math.abs(e.clientY - startY) > 4) moved = true;
       const al = allowedStates();
-      const h = clamp(startH + (startY - e.clientY), heights.peek * 0.9, heights[al[al.length - 1]]);
+      const h = clamp(startH + (startY - e.clientY), heights.mini * 0.9, heights[al[al.length - 1]]);
       sheet.style.setProperty('--h', h + 'px');
       v = (lastY - e.clientY) / ((e.timeStamp - lastT) || 1);
       lastY = e.clientY; lastT = e.timeStamp;
@@ -526,7 +546,7 @@
       dragging = false;
       sheet.classList.remove('dragging');
       const al = allowedStates();
-      if (!moved) { applyState(al[(al.indexOf(S.state) + 1) % al.length]); layoutAfter(); return; }
+      if (!moved) { applyState(nextState()); layoutAfter(); return; }
       const cur = sheet.getBoundingClientRect().height + v * 160;
       let best = al[0], bd = 1e9;
       al.forEach((k) => { const d = Math.abs(heights[k] - cur); if (d < bd) { bd = d; best = k; } });
@@ -536,7 +556,7 @@
     grab.addEventListener('pointerup', end);
     grab.addEventListener('pointercancel', end);
     grab.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const al = allowedStates(); applyState(al[(al.indexOf(S.state) + 1) % al.length]); layoutAfter(); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); applyState(nextState()); layoutAfter(); }
     });
   })();
 
@@ -843,6 +863,7 @@
       if (!x) { closeSheet(); return; }
       const ti = body.querySelector('.title'), su = body.querySelector('.sub');
       if (ti) ti.textContent = x.name;
+      const mt = body.querySelector('.mini-title'); if (mt) mt.textContent = x.name;
       if (su) su.innerHTML = subText(x, true);
       const ta = $('#descr');
       if (ta && document.activeElement !== ta && ta.value !== (x.note || '')) ta.value = x.note || '';

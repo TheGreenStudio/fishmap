@@ -228,3 +228,13 @@ textarea{resize:none;min-height:96px}
 .input.sm{height:40px;padding:0 12px;border-radius:12px;font-size:14px;flex:2;min-width:0}
 .grp .grow .btn-primary{flex:1}
 .linkbtn{margin-top:8px;font-size:13px;font-weight:500;color:var(--muted);text-decoration:underline;height:32px}
+
+/* collapsed (mini) sheet */
+.hbtns{display:flex;align-items:center;gap:8px;flex:none}
+.mini{display:none;align-items:center;gap:8px;height:56px}
+.sheet.is-mini .mini{display:flex}
+.sheet.is-mini .head,.sheet.is-mini #wxNow,.sheet.is-mini #wxFish,.sheet.is-mini #wxChips,.sheet.is-mini #extra,.sheet.is-mini #actions{display:none!important}
+.mini-main{flex:1;min-width:0;display:flex;align-items:center;gap:10px;height:56px;text-align:left}
+.mini-wx{display:inline-flex;align-items:center;gap:6px;font-size:18px;font-weight:700;flex:none;min-width:8px}
+.mini-wx svg{color:var(--primary)}
+.mini-title{flex:1;min-width:0;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
