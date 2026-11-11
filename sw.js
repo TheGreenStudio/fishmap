@@ -1,5 +1,5 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v13';
+const SHELL = 'fishmap-shell-v14';
 const TILES = 'fishmap-tiles-v1';
 const PHOTOS = 'fishmap-photos-v1'; // фото из группы, их нельзя удалять при обновлении
 const MAX_TILES = 3000;

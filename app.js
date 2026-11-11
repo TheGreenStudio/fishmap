@@ -627,7 +627,8 @@
     $('#fSave').onclick = go;
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   }
-  const canDelete = (s) => (s.owner ? s.owner === S.dev : (!s.author || s.author === S.me));
+  const sameName = (a) => !!(a && S.me && a.trim().toLowerCase() === S.me.trim().toLowerCase());
+  const canDelete = (s) => (s.owner === S.dev || sameName(s.author) || (!s.owner && !s.author));
   function moreMenu(t) {
     openModal('<h3>' + esc(t.name) + '</h3><div class="stack">' +
       (t.shared ? '<p class="sub">Общая точка из файла spots.json</p>' :
@@ -733,8 +734,7 @@
       '<h4>Слой карты</h4><div class="seg" id="segLayer"><button type="button" data-v="osm">Карта</button><button type="button" data-v="topo">Топо</button></div>' +
       '<h4>Тема</h4><div class="seg" id="segTheme"><button type="button" data-v="auto">Авто</button><button type="button" data-v="light">Светлая</button><button type="button" data-v="dark">Тёмная</button></div>' +
       '<h4>Группа</h4><div id="grp" class="grp"></div>' +
-      '<button class="btn btn-secondary" id="bOffline" type="button" style="width:100%;flex:none;height:48px;font-size:15px">' + ic('download', 20) + '<span id="offTxt">Сохранить карту для офлайна</span></button>' +
-      '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Офлайн сохраняются плитки вокруг ваших точек для выбранного слоя. Делайте это по Wi-Fi.</p>' +
+      '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Без интернета карта показывает те места, которые вы уже смотрели с интернетом. Откройте нужные озёра и реки по Wi-Fi заранее.</p>' +
       '<button class="linkbtn" id="bUpdate" type="button">Обновить приложение <span id="ver"></span></button>';
     menu.hidden = false; $('#bLayers').classList.add('on');
     const sync = () => {
@@ -745,7 +745,6 @@
     menu.querySelectorAll('#segLayer button').forEach((b) => b.addEventListener('click', () => { setLayer(b.dataset.v); sync(); }));
     menu.querySelectorAll('#segTheme button').forEach((b) => b.addEventListener('click', () => { S.theme = b.dataset.v; lsSet('fishmap.theme', S.theme); applyTheme(); sync(); }));
     renderGroup();
-    $('#bOffline').addEventListener('click', downloadOffline);
     if ('caches' in window) caches.keys().then((ks) => { const k = ks.find((x) => /shell/.test(x)), el = $('#ver'); if (k && el) el.textContent = '(' + k.replace('fishmap-shell-', '') + ')'; }).catch(() => {});
     $('#bUpdate').addEventListener('click', async () => {
       try {
@@ -764,43 +763,6 @@
   });
 
   /* ---------- offline tiles ---------- */
-  const tileXY = (lat, lon, z) => {
-    const n = Math.pow(2, z), r = lat * Math.PI / 180;
-    return [Math.floor((lon + 180) / 360 * n), Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n)];
-  };
-  let offBusy = false;
-  async function downloadOffline() {
-    if (offBusy) return;
-    if (!('caches' in window)) { toast('Браузер не поддерживает офлайн'); return; }
-    offBusy = true;
-    const label = $('#offTxt');
-    const layer = layers[S.layer];
-    const c = map.getCenter();
-    const pts = allSpots().length ? allSpots().map((s) => [s.lat, s.lon]) : [[c.lat, c.lng]];
-    const plan = [[10, 1], [12, 1], [13, 2], [14, 2], [15, 2]];
-    const urls = new Set();
-    pts.forEach(([lat, lon]) => plan.forEach(([z, r]) => {
-      const [cx, cy] = tileXY(lat, lon, z), max = Math.pow(2, z);
-      for (let x = cx - r; x <= cx + r; x++) for (let y = cy - r; y <= cy + r; y++) {
-        if (y < 0 || y >= max) continue;
-        urls.add(layer.getTileUrl({ x: ((x % max) + max) % max, y: y, z: z }));
-      }
-    }));
-    const list = Array.from(urls);
-    const cache = await caches.open('fishmap-tiles-v1');
-    let done = 0, fail = 0, i = 0;
-    async function worker() {
-      while (i < list.length) {
-        const u = list[i++];
-        try { if (!(await cache.match(u))) { const r = await fetch(u, { mode: 'cors' }); if (r.ok) await cache.put(u, r); else fail++; } } catch (e) { fail++; }
-        done++;
-        if (label && (done % 8 === 0 || done === list.length)) label.textContent = 'Сохраняю: ' + done + ' / ' + list.length;
-      }
-    }
-    await Promise.all([worker(), worker(), worker()]);
-    offBusy = false;
-    if (label) label.textContent = fail ? 'Готово, не загрузилось: ' + fail : 'Карта сохранена ✓';
-  }
 
   /* ---------- online / offline ---------- */
   function netState() {
@@ -812,13 +774,15 @@
 
   /* ---------- sync with Supabase (shared group data) ---------- */
   const SB = { url: 'https://caxuvdrzuurhdtmqbkbg.supabase.co', key: 'sb_publishable_gS7j7lRfJV5rz-nr6AzV7g_Q9lfGNzt' };
+  // имя автора для сервера: в заголовках нельзя кириллицу, поэтому шестнадцатеричная запись UTF-8
+  const nameHex = () => Array.from(new TextEncoder().encode((S.me || '').trim())).map((b) => b.toString(16).padStart(2, '0')).join('');
   async function sb(path, opt) {
     opt = opt || {};
     const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
     try {
       return await fetch(SB.url + '/rest/v1/' + path, {
         method: opt.method || 'GET', signal: ctl.signal,
-        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'Content-Type': 'application/json' }, opt.headers || {}),
+        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'x-author-name': nameHex(), 'Content-Type': 'application/json' }, opt.headers || {}),
         body: opt.body ? JSON.stringify(opt.body) : undefined
       });
     } finally { clearTimeout(to); }
@@ -1211,7 +1175,7 @@
   const plural = (n, a, b, c) => { const m = n % 100, d = n % 10; return (m > 10 && m < 15) ? c : d === 1 ? a : (d > 1 && d < 5) ? b : c; };
   const commentsOf = (id) => S.comments.filter((c) => c.spot_id === id).sort((a, b) => a.created - b.created);
   const nc = (id) => S.comments.reduce((n, c) => n + (c.spot_id === id ? 1 : 0), 0);
-  const canDelComment = (c) => (c.owner ? c.owner === S.dev : (!c.author || c.author === S.me));
+  const canDelComment = (c) => (c.owner === S.dev || sameName(c.author) || (!c.owner && !c.author));
   const commentsHtml = (t) => t.shared ? '' : '<section class="cm-sec" id="cmSec"><h3>Отзывы <span id="cmN" class="cm-n"></span></h3><div id="cmList"></div><div id="cmForm"></div></section>';
   function renderComments() {
     const box = $('#cmList'), t = S.sel && findSpot(S.sel);
