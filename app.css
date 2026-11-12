@@ -55,6 +55,7 @@ body.is-offline .fab-locate{top:calc(192px + var(--safe-t))}
 
 .hint{position:fixed;z-index:560;left:16px;right:16px;bottom:calc(20px + var(--safe-b));background:var(--surface);color:var(--text);border-radius:18px;padding:14px 16px;box-shadow:0 4px 20px var(--shadow);display:flex;align-items:center;gap:10px;font-size:14px;font-weight:500;transition:opacity .2s,transform .2s}
 .hint svg{color:var(--primary)}
+#hint[hidden]{display:none}
 body.sheet-open .hint,body.list-open .hint{opacity:0;pointer-events:none;transform:translateY(10px)}
 
 .toast{position:fixed;z-index:900;left:50%;bottom:24px;transform:translate(-50%,8px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:20px;font-size:14px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:90vw;text-align:center}

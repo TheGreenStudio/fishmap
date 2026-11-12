@@ -13,6 +13,8 @@
   };
   // кэш погоды: каждое новое место на карте добавляет запись; старые и лишние удаляем, чтобы не забить память телефона
   const WX_PRE = ['fishmap.wx.', 'fishmap.hist.'];
+  // погода сохранённых точек защищена от вытеснения (до 300 точек), иначе список точек перезапрашивал бы её снова и снова
+  let wxProtect = new Set();
   function pruneCache(keep) {
     try {
       const ents = [];
@@ -20,17 +22,17 @@
         const key = localStorage.key(k);
         if (!key || !WX_PRE.some((p) => key.startsWith(p))) continue;
         let t = 0; try { t = (JSON.parse(localStorage.getItem(key)) || {}).t || 0; } catch (e) { /* испорчено: удалить */ }
-        ents.push({ key: key, t: t });
+        ents.push({ key: key, t: t, keep: wxProtect.has(key) });
       }
-      ents.sort((x, y) => y.t - x.t);
-      ents.forEach((e, i) => { if (i >= keep || Date.now() - e.t > 10 * 864e5) localStorage.removeItem(e.key); });
+      ents.sort((x, y) => (y.keep - x.keep) || (y.t - x.t));
+      const cap = keep + Math.min(300, ents.filter((e) => e.keep).length);
+      ents.forEach((e, i) => { if (i >= cap || Date.now() - e.t > 10 * 864e5) localStorage.removeItem(e.key); });
     } catch (e) { /* хранилище недоступно */ }
   }
   function cacheSet(k, v) {
     try { localStorage.setItem(k, JSON.stringify(v)); return; } catch (e) { pruneCache(15); }
     try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* не страшно: это только кэш */ }
   }
-  pruneCache(120);
   const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); });
   const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -99,8 +101,9 @@
   function loadLocal() {
     let arr = lsGet(KEY, null);
     if (!arr) {
-      const old = lsGet('fishmap.v2.spots', null) || lsGet('fishmap.local', []);
-      arr = old.map((s) => ({ id: isUuid(s.id) ? s.id : uid(), name: s.name, lat: s.lat, lon: s.lon, note: s.note || '', author: '', created: s.created || Date.now(), updated: Date.now(), dirty: true }));
+      let old = lsGet('fishmap.v2.spots', null) || lsGet('fishmap.local', []);
+      if (!Array.isArray(old)) old = [];   // испорченный старый формат не должен ломать запуск
+      arr = old.filter((s) => s && typeof s === 'object').map((s) => ({ id: isUuid(s.id) ? s.id : uid(), name: s.name, lat: s.lat, lon: s.lon, note: s.note || '', author: '', created: s.created || Date.now(), updated: Date.now(), dirty: true }));
       if (arr.length) lsSet(KEY, arr);
     }
     if (!Array.isArray(arr)) return [];
@@ -174,6 +177,7 @@
       spotMarkers.set(s.id, m);
     });
     $('#count').textContent = seasonSpots().length;
+    updateHint();
   }
   function setTempMarker(ll) {
     if (tempMarker) tempMarker.remove();
@@ -329,7 +333,7 @@
     parts.push(pressureParts(i));
     const eff = i.wind + 0.5 * Math.max(0, i.gust - i.wind);
     parts.push({ name: 'Ветер', max: 15, pts: interp(F_WIND_ICE, eff),
-      text: (i.dayMode ? 'до ' : '') + rnd(i.wind) + ' км/ч, порывы ' + rnd(i.gust) + (eff <= 8 ? ', слабый' : eff <= 15 ? ', лёгкий' : eff <= 22 ? ', заметный, холодно у лунки' : eff <= 30 ? ', сильный, мело́ет снег' : ', очень сильный') });
+      text: (i.dayMode ? 'до ' : '') + rnd(i.wind) + ' км/ч, порывы ' + rnd(i.gust) + (eff <= 8 ? ', слабый' : eff <= 15 ? ', лёгкий' : eff <= 22 ? ', заметный, холодно у лунки' : eff <= 30 ? ', сильный, метёт снег' : ', очень сильный') });
     parts.push({ name: 'Ощущаемая температура', max: 20, pts: cp,
       text: fmtT(chill) + (i.thaw ? ', оттепель, лёд слабеет' : chill <= -35 ? ', опасный мороз' : chill <= -27 ? ', очень холодно' : chill <= -18 ? ', морозно' : chill <= -3 ? ', комфортно для льда' : chill <= 1 ? ', около нуля' : ', тепло, лёд слабеет') });
     const cat = i.iceCat || 'unknown';
@@ -393,35 +397,41 @@
     const h = 1.8 * Math.sqrt(Math.max(0, fdd - 25));
     return h < 5 ? 'none' : h < 10 ? 'thin' : h < 20 ? 'check' : 'ok';
   }
+  // индекс сегодняшнего дня в прогнозе по часовому поясу точки: при старом кэше (без сети) день 0 может быть вчерашним
+  function dayIdx(d) {
+    const dy = d.daily, today = new Date(Date.now() + (d.utc_offset_seconds || 0) * 1000).toISOString().slice(0, 10);
+    const i = dy.time.indexOf(today);
+    return i >= 0 ? i : (dy.time[0] > today ? 0 : dy.time.length - 1);
+  }
   function fishCtx(d, hist) {
-    const dy = d.daily, mode = S.fishMode || 'auto';
-    const past = histBefore(hist, dy.time[0]);
+    const dy = d.daily, mode = S.fishMode || 'auto', i0 = dayIdx(d);
+    const past = histBefore(hist, dy.time[i0]);
     const mean = (mx, mn) => (mx + mn) / 2;
     const ms = past.slice(-5).map((x) => mean(x.mx, x.mn));
-    for (let k = 0; k < 2 && k < dy.time.length; k++) if (dy.temperature_2m_max[k] != null && dy.temperature_2m_min[k] != null) ms.push(mean(dy.temperature_2m_max[k], dy.temperature_2m_min[k]));
+    for (let k = i0; k < i0 + 2 && k < dy.time.length; k++) if (dy.temperature_2m_max[k] != null && dy.temperature_2m_min[k] != null) ms.push(mean(dy.temperature_2m_max[k], dy.temperature_2m_min[k]));
     const avg = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : 10;
     const cat = iceCategory(past);
     // авто: подлёдная при морозах, а также когда лёд, по оценке, уже встал (оттепель среди зимы режим не меняет)
     const autoIce = avg <= -5 || cat === 'check' || cat === 'ok';
     const ice = mode === 'ice' || (mode === 'auto' && autoIce);
     const yMax = past.length ? past[past.length - 1].mx : -99;
-    return { ice: ice, autoIce: autoIce, mode: mode, avg: avg, cat: cat, yMax: yMax };
+    return { ice: ice, autoIce: autoIce, mode: mode, avg: avg, cat: cat, yMax: yMax, i0: i0 };
   }
   const thawOf = (d, ctx, i) => {
     const mx = d.daily.temperature_2m_max;
-    return Math.max(mx[i] == null ? -99 : mx[i], i === 0 ? ctx.yMax : (mx[i - 1] == null ? -99 : mx[i - 1])) > 2;
+    return Math.max(mx[i] == null ? -99 : mx[i], i === 0 ? ctx.yMax : (mx[i - 1] == null ? -99 : mx[i - 1])) > 2;   // вчера: из истории или из прогноза
   };
 
   function fishNow(d, series, ctx) {
     ctx = ctx || fishCtx(d, null);
-    const c = d.current, dy = d.daily;
+    const c = d.current, dy = d.daily, i0 = ctx.i0 || 0;
     return fishScore({
-      ice: ctx.ice, iceCat: ctx.cat, thaw: ctx.ice && (thawOf(d, ctx, 0) || c.temperature_2m > 1),
+      ice: ctx.ice, iceCat: ctx.cat, thaw: ctx.ice && (thawOf(d, ctx, i0) || c.temperature_2m > 1),
       temp: c.temperature_2m, pressure: c.pressure_msl,
       dp: series.length >= 7 ? series[series.length - 1] - series[series.length - 7] : null,
       wind: c.wind_speed_10m, gust: c.wind_gusts_10m, cloud: c.cloud_cover,
-      precip: Math.max((dy.precipitation_sum[0] || 0) * 0.6, codePrecip(c.weather_code)), code: c.weather_code,
-      hour: hourOf(c.time), sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null
+      precip: Math.max((dy.precipitation_sum[i0] || 0) * 0.6, codePrecip(c.weather_code)), code: c.weather_code,
+      hour: hourOf(c.time), sr: dy.sunrise && dy.sunrise[i0] ? hourOf(dy.sunrise[i0]) : null, ss: dy.sunset && dy.sunset[i0] ? hourOf(dy.sunset[i0]) : null
     });
   }
   function fishDay(d, i, ctx) {
@@ -580,7 +590,8 @@
       const fd = fishDay(d, i, fctx);
       return { i: i, name: dayName(dy.time[i]), score: fd.score, lvl: fd.lvl };
     });
-    S.fish = { now: fnow, ctx: fctx, days: fdays, sr: dy.sunrise && dy.sunrise[0] ? hourOf(dy.sunrise[0]) : null, ss: dy.sunset && dy.sunset[0] ? hourOf(dy.sunset[0]) : null };
+    const i0 = fctx.i0;
+    S.fish = { now: fnow, ctx: fctx, days: fdays, sr: dy.sunrise && dy.sunrise[i0] ? hourOf(dy.sunrise[i0]) : null, ss: dy.sunset && dy.sunset[i0] ? hourOf(dy.sunset[i0]) : null };
     let bestDay = -1;
     fdays.forEach((x, i) => { if (x.score >= 50 && (bestDay < 0 || x.score > fdays[bestDay].score)) bestDay = i; });
     $('#wxFish').innerHTML = '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
@@ -681,8 +692,12 @@
     if (!sheet.classList.contains('open')) return;
     measure();
     applyState(S.state, false);
-    focusTarget();
+    // если пользователь уже сам двигал карту, не возвращаем её к точке (например, когда догрузилась погода)
+    if (!S.userMoved) focusTarget();
   }
+  const markMoved = () => { S.userMoved = true; };
+  $('#map').addEventListener('pointerdown', markMoved, { passive: true });
+  $('#map').addEventListener('wheel', markMoved, { passive: true });
   function closeSheet() {
     sheet.classList.remove('open');
     sheet.style.setProperty('--h', '0px');
@@ -752,6 +767,7 @@
       $('#bSave').addEventListener('click', () => saveDialog({ lat: t.lat, lon: t.lon }, t.label));
     }
     S.state = startState || S.state;
+    S.userMoved = false;
     measure();
     applyState(S.state, true);
     focusTarget();
@@ -769,7 +785,7 @@
   }
 
   function openSpot(id, st) { S.sel = id; S.temp = null; setTempMarker(null); renderMarkers(); renderSheet(st || 'half'); }
-  function openTemp(ll) { S.sel = null; S.temp = { lat: ll.lat, lon: ll.lng }; setTempMarker(ll); renderMarkers(); renderSheet('peek'); }
+  function openTemp(ll, label) { S.sel = null; S.temp = { lat: ll.lat, lon: ll.lng, label: label ? String(label).slice(0, 60) : '' }; setTempMarker(ll); renderMarkers(); renderSheet('peek'); }
 
   // drag
   (function bindDrag() {
@@ -811,6 +827,7 @@
   let ignoreMapClick = false;
   map.on('click', (e) => {
     if (ignoreMapClick) return;
+    if (!lsGet('fishmap.hintSeen', false)) { lsSet('fishmap.hintSeen', true); updateHint(); }
     openTemp(e.latlng);
   });
   window.addEventListener('resize', () => { layoutSheet(); });
@@ -820,7 +837,7 @@
   function openModal(html) { mcard.innerHTML = html; modal.hidden = false; }
   function closeModal() { modal.hidden = true; mcard.innerHTML = ''; }
   modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!modal.hidden) closeModal(); else if (!$('#layerMenu').hidden) $('#layerMenu').hidden = true; } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!modal.hidden) closeModal(); else if (!menu.hidden) closeMenu(); } });
 
   let toastT;
   function toast(msg, ms) {
@@ -835,7 +852,8 @@
   }
 
   function saveDialog(p, presetName) {
-    const n = allSpots().length + 1;
+    // свободный номер: «Точка N» не должна повторять уже существующее название
+    const used = new Set(allSpots().map((x) => x.name)); let n = 1; while (used.has('Точка ' + n)) n++;
     openModal('<h3>Сохранить точку</h3><p class="sub">' + coordsText(p) + '</p>' +
       '<label for="fName">Название</label><input id="fName" class="input" maxlength="60" value="' + esc(presetName || 'Точка ' + n) + '" placeholder="Например: Bow River, мост">' +
       '<label>Сезон</label><div class="seg" id="fSeason" role="group" aria-label="Сезон точки">' + ['summer', 'winter', 'both'].map((k) => '<button type="button" data-v="' + k + '" aria-pressed="' + (k === curSeason()) + '">' + SEAS[k] + '</button>').join('') + '</div>' +
@@ -862,6 +880,7 @@
     $('#fSave').onclick = go;
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   }
+  const DUP_DEG = 0.0002;   // ~20 м: координаты считаются той же точкой
   const sameName = (a) => !!(a && S.me && a.trim().toLowerCase() === S.me.trim().toLowerCase());
   const canDelete = (s) => (s.owner === S.dev || sameName(s.author) || (!s.owner && !s.author));
   function moreMenu(t) {
@@ -878,7 +897,12 @@
         '<div class="row"><button class="btn btn-secondary" id="rCancel" type="button">Отмена</button><button class="btn btn-primary" id="rSave" type="button">Сохранить</button></div>');
       const inp = $('#rName'); inp.focus(); inp.select();
       $('#rCancel').onclick = closeModal;
-      const go = () => { const v = inp.value.trim(); if (!v) return; const s = findSpot(t.id); s.name = v; touch(s); closeModal(); renderMarkers(); renderSheet(S.state); };
+      const go = () => {
+        const v = inp.value.trim(); if (!v) return;
+        const s = findSpot(t.id);
+        if (!s) { closeModal(); toast('Эту точку уже удалили'); return; }
+        s.name = v; touch(s); closeModal(); renderMarkers(); renderSheet(S.state);
+      };
       $('#rSave').onclick = go; inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     };
     $('#mSeas').onclick = () => {
@@ -953,16 +977,37 @@
     }).join('') + hideNote;
     hydrateListThumbs(box, arr);
     box.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
-      const s = findSpot(c.dataset.id); closeList(); openSpot(s.id, 'half');
+      const s = findSpot(c.dataset.id); closeList(); if (s) openSpot(s.id, 'half'); else toast('Эту точку уже удалили');
     }));
-    arr.forEach((s) => Promise.all([getWeather(s.lat, s.lon), getHistory(s.lat, s.lon).catch(() => null)]).then(([r, hs]) => {
-      const el = box.querySelector('[data-w="' + s.id + '"]'); if (!el || !r) return;
-      const c = r.data.current;
-      let fs = null;
-      try { fs = fishNow(r.data, pressureSeries(r.data), fishCtx(r.data, hs)); } catch (e) { /* нет данных для оценки */ }
-      el.innerHTML = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч' +
-        (fs ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
-    }));
+    // погода в карточках: готовая строка берётся из памяти (каждая буква в поиске перерисовывает список),
+    // новые запросы идут не больше 6 одновременно и не повторяются, пока предыдущий не завершился
+    arr.forEach((s) => {
+      const m = listMem.get(s.id), el = box.querySelector('[data-w="' + s.id + '"]');
+      if (m && m.mode === S.fishMode && Date.now() - m.t < 10 * 60e3) { if (el) el.innerHTML = m.html; return; }
+      if (listPending.has(s.id)) return;
+      listPending.add(s.id);
+      listLoad(s).then(([r, hs]) => {
+        listPending.delete(s.id);
+        if (!r) return;
+        const c = r.data.current;
+        let fs = null;
+        try { fs = fishNow(r.data, pressureSeries(r.data), fishCtx(r.data, hs)); } catch (e) { /* нет данных для оценки */ }
+        const html = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч' +
+          (fs ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
+        listMem.set(s.id, { t: Date.now(), mode: S.fishMode, html: html });
+        const el2 = $('#lvList') && $('#lvList').querySelector('[data-w="' + s.id + '"]'); if (el2) el2.innerHTML = html;
+      });
+    });
+  }
+  const listMem = new Map(), listPending = new Set(), listQ = [];
+  let listActive = 0;
+  function listLoad(s) { return new Promise((res) => { listQ.push([s, res]); listPump(); }); }
+  function listPump() {
+    while (listActive < 6 && listQ.length) {
+      const [s, res] = listQ.shift(); listActive++;
+      Promise.all([getWeather(s.lat, s.lon), getHistory(s.lat, s.lon).catch(() => null)])
+        .then(res, () => res([null, null])).finally(() => { listActive--; listPump(); });
+    }
   }
   $('#bList').addEventListener('click', openList);
 
@@ -1073,10 +1118,14 @@
     if (!S.code) return;
     clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms == null ? 1200 : ms);
   }
+  // дождаться окончания идущей синхронизации (нужно перед сменой кода группы)
+  async function waitIdle(maxMs) { const t0 = Date.now(); while (syncing && Date.now() - t0 < (maxMs || 15000)) await new Promise((r) => setTimeout(r, 100)); }
   async function syncNow() {
     if (!S.code || !navigator.onLine) return;
     if (syncing) { syncAgain = true; return; }
     syncing = true; syncAgain = false; setSync('busy');
+    const code = S.code;   // если код сменили во время синхронизации, её результат не применяем
+    const sameCode = () => S.code === code;
     try {
       let r = await sb('rpc/group_check', { method: 'POST', body: {} });
       if (!r.ok) throw new Error('check ' + r.status);
@@ -1086,13 +1135,28 @@
         if (!r.ok && !(r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 403)) throw new Error('delete ' + r.status);
         S.tomb = S.tomb.filter((x) => x !== id); saveLocal();
       }
+      if (!sameCode()) { syncAgain = true; return; }
+      // правка точки, которую автор тем временем удалил: не воскрешаем её, а убираем у себя
+      const edited = S.spots.filter((x) => !x.shared && x.dirty && x.srv && isUuid(x.id));
+      if (edited.length) {
+        r = await sb('spots?select=id&id=in.(' + edited.map((x) => x.id).join(',') + ')');
+        if (!r.ok) throw new Error('exists ' + r.status);
+        const alive = new Set((await r.json()).map((x) => x.id));
+        const lost = edited.filter((x) => !alive.has(x.id));
+        if (lost.length && sameCode()) {
+          const ids = new Set(lost.map((x) => x.id));
+          S.spots = S.spots.filter((x) => !ids.has(x.id)); saveLocal();
+          toast(lost.length === 1 ? 'Точку «' + lost[0].name + '» удалил её автор, ваша правка не сохранилась' : 'Удалённых авторами точек: ' + lost.length + ', ваши правки не сохранились', 6000);
+          if (S.sel && ids.has(S.sel)) closeSheet();
+        }
+      }
       // точки, которые база отклонила (4xx), не блокируют остальные; повтор после следующей правки точки
       const dirty = S.spots.filter((x) => !x.shared && x.dirty && x.bad !== x.updated);
       if (dirty.length) {
         const snap = new Map(dirty.map((x) => [x.id, x.updated]));
         const row = (x) => ({ id: x.id, name: String(x.name || 'Точка').slice(0, 80), lat: x.lat, lon: x.lon, note: String(x.note || '').slice(0, 4000), season: seasonOf(x), author: String(x.author || '').slice(0, 40), author_id: x.owner === undefined ? S.dev : (x.owner || null), created_at: new Date(x.created || Date.now()).toISOString() });
         const push = (list) => sb('spots?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body: list.map(row) });
-        const done = (x) => { if (x.owner === undefined) x.owner = S.dev; delete x.bad; if (snap.get(x.id) === x.updated) delete x.dirty; };
+        const done = (x) => { if (x.owner === undefined) x.owner = S.dev; delete x.bad; x.srv = true; if (snap.get(x.id) === x.updated) delete x.dirty; };
         r = await push(dirty);
         if (r.ok) dirty.forEach(done);
         else if (r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 403) {
@@ -1110,20 +1174,25 @@
       r = await sb('spots?select=*&order=created_at.asc');
       if (!r.ok) throw new Error('pull ' + r.status);
       const rows = await r.json();
+      if (!sameCode()) { syncAgain = true; return; }   // код сменили или вышли из группы: ответ относится к другой группе
+      const gone = new Set(S.tomb);   // удалённые здесь, но ещё не удалённые на сервере
       const remote = new Set(rows.map((x) => x.id));
       const local = new Map(S.spots.filter((x) => !x.shared).map((x) => [x.id, x]));
       let added = 0;
       rows.forEach((row) => {
+        if (gone.has(row.id)) return;
         const l = local.get(row.id);
+        if (l) l.srv = true;
         if (l && l.dirty) return;
-        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', season: row.season || 'summer', author: row.author || '', owner: row.author_id || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at) };
+        const o = { id: row.id, name: row.name, lat: row.lat, lon: row.lon, note: row.note || '', season: row.season || 'summer', author: row.author || '', owner: row.author_id || '', created: Date.parse(row.created_at), updated: Date.parse(row.updated_at), srv: true };
         if (l) Object.assign(l, o); else { S.spots.push(o); added++; }
       });
-      S.spots = S.spots.filter((x) => x.shared || x.dirty || remote.has(x.id));
-      saveLocal();
+      S.spots = S.spots.filter((x) => !gone.has(x.id) && (x.shared || x.dirty || remote.has(x.id)));
+      saveLocal(); updateWxProtect();
       let perr = false;
-      try { await syncPhotos(); } catch (e) { perr = true; }
-      try { await syncComments(); } catch (e) { perr = true; }
+      try { await syncPhotos(sameCode); } catch (e) { perr = true; }
+      try { await syncComments(sameCode); } catch (e) { perr = true; }
+      if (!sameCode()) { syncAgain = true; return; }
       S.photoErr = perr; if (perr) scheduleSync(30000);
       const first = !S.sync.t;
       setSync('ok');
@@ -1162,9 +1231,18 @@
     $('#nOk').onclick = go; inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   }
   async function joinGroup(code) {
+    // сначала дождаться идущей синхронизации со старым кодом, иначе её ответы смешаются с новым кодом
+    await waitIdle();
+    const prev = S.code, prevT = S.sync.t;
     S.code = code; S.sync.t = 0; lsSet('fishmap.code', code);
     await syncNow();
-    if (S.sync.state === 'denied') { S.code = ''; lsSet('fishmap.code', ''); toast('Код не подошёл. Проверьте ссылку'); renderGroup(); return false; }
+    if (S.sync.state === 'denied') {
+      // неверный код не сохраняем: возвращаем прежнюю группу, если она была
+      S.code = prev; S.sync.t = prevT; lsSet('fishmap.code', prev);
+      setSync('off'); toast('Код не подошёл. Проверьте ссылку'); renderGroup();
+      if (prev) scheduleSync(300);
+      return false;
+    }
     renderGroup();
     if (!S.me) askName(renderGroup);
     return true;
@@ -1172,7 +1250,7 @@
   function leaveGroup() {
     S.code = ''; lsSet('fishmap.code', ''); S.sync = { state: 'off', t: 0 }; lsSet('fishmap.syncT', 0);
     // свои точки снова отправятся при входе в группу; чужие не помечаем, иначе удалённые их авторами точки вернутся
-    S.spots.forEach((x) => { if (!x.shared && (x.owner === S.dev || x.owner === undefined)) x.dirty = true; });
+    S.spots.forEach((x) => { if (!x.shared && (x.owner === S.dev || x.owner === undefined)) { x.dirty = true; x.srv = false; } });
     saveLocal(); renderGroup(); toast('Вы отключились от группы. Точки остались на телефоне');
   }
   function renderGroup() {
@@ -1244,12 +1322,22 @@
     const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 45000);
     try {
       return await fetch(SB.url + '/storage/v1/' + path, { method: method, signal: ctl.signal,
-        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code }, opt.headers || {}), body: opt.body });
+        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'x-author-name': nameHex() }, opt.headers || {}), body: opt.body });
     } finally { clearTimeout(to); }
   }
 
   // сжатие: до 1600 px по длинной стороне, JPEG; перерисовка в canvas убирает EXIF (геометки)
-  async function loadBitmap(file) {
+  async function loadBitmap(file, side) {
+    // большие снимки (50–200 Мп) сразу декодируем уменьшенными, иначе на телефоне не хватит памяти.
+    // Задаём только ширину: пропорции браузер сохраняет сам, поэтому поворот по EXIF не может исказить фото.
+    try {
+      const u = URL.createObjectURL(file), im = new Image();
+      const dim = await new Promise((res) => { im.onload = () => res([im.naturalWidth, im.naturalHeight]); im.onerror = () => res([0, 0]); im.src = u; });
+      URL.revokeObjectURL(u);
+      if (dim[0] && Math.max(dim[0], dim[1]) > side * 1.5) {
+        return await createImageBitmap(file, { imageOrientation: 'from-image', resizeWidth: Math.max(1, rnd(dim[0] * side / Math.max(dim[0], dim[1]))), resizeQuality: 'high' });
+      }
+    } catch (e) { /* браузер не умеет уменьшать при декодировании: обычный путь */ }
     try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { /* запасной путь */ }
     return new Promise((res, rej) => {
       const u = URL.createObjectURL(file), im = new Image();
@@ -1264,20 +1352,22 @@
     const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(src, 0, 0, c.width, c.height);
     return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('blob'))), 'image/jpeg', q));
   }
+  let photoBusy = 0;   // пока фото сжимаются, приложение не перезагружается ради обновления
   async function addPhotos(spotId, files) {
     const list = Array.from(files || []).slice(0, 10);
     let ok = 0;
-    for (const f of list) {
+    photoBusy++;
+    try { for (const f of list) {
       try {
-        const bmp = await loadBitmap(f);
+        const bmp = await loadBitmap(f, 1600);
         const full = await resizeTo(bmp, 1600, 0.8), thumb = await resizeTo(bmp, 400, 0.72);
         if (bmp.close) bmp.close();
-        const rec = { id: uid(), spot_id: spotId, author: S.me || '', created: Date.now(), full: full, thumb: thumb };
+        const rec = { id: uid(), spot_id: spotId, author: S.me || '', owner: S.dev, created: Date.now(), full: full, thumb: thumb };
         await idbPut(rec);
         S.pending.push({ id: rec.id, spot_id: spotId, author: rec.author, created: rec.created, thumbUrl: URL.createObjectURL(thumb) });
         ok++; renderPhotoStrip();
       } catch (e) { toast('Не удалось обработать фото'); }
-    }
+    } } finally { photoBusy--; }
     if (ok) { toast(navigator.onLine ? 'Загружаю фото…' : 'Фото сохранено, загрузится при появлении сети'); scheduleSync(0); }
   }
 
@@ -1340,7 +1430,7 @@
   }
 
   const photosOf = (id) => S.pending.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, pending: true, thumbUrl: x.thumbUrl, author: x.author, created: x.created }))
-    .concat(S.photos.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, path: x.path, author: x.author, created: Date.parse(x.created_at) })))
+    .concat(S.photos.filter((x) => x.spot_id === id).map((x) => ({ id: x.id, path: x.path, author: x.author, owner: x.author_id || '', created: Date.parse(x.created_at) })))
     .sort((a, b) => b.created - a.created);
   const photosHtml = (t, saved) => saved ? (t.shared ? '' : '<section class="ph-sec"><h3>Фото</h3><div id="phStrip" class="pstrip"></div></section>')
     : '<section class="ph-sec"><h3>Фото</h3><p class="pnote">Сохраните точку, и здесь появится кнопка для добавления фото.</p></section>';
@@ -1362,7 +1452,7 @@
   }
 
   // полноэкранный просмотр
-  function closeViewer(fromPop) {
+  function closeViewer() {
     const v = $('#viewer'); if (!v) return;
     v.remove();
   }
@@ -1390,6 +1480,7 @@
       $('#vCount').textContent = (i + 1) + ' / ' + items.length;
       const it = items[i];
       $('#vInfo').textContent = [it.author, new Date(it.created).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }), it.pending ? 'ещё не загружено' : ''].filter(Boolean).join(' · ');
+      $('#vDel').hidden = !canDelPhoto(it);   // удалить фото может только его автор
       loadFull(i); loadFull(i - 1); loadFull(i + 1);
     }
     sc.scrollLeft = cur * sc.clientWidth;
@@ -1398,20 +1489,27 @@
     $('#vClose').onclick = () => closeViewer();
     $('#vDel').onclick = () => deletePhoto(items[cur]);
   }
+  const canDelPhoto = (it) => !!it && (it.pending || it.owner === S.dev || sameName(it.author) || (!it.owner && !String(it.author || '').trim()));
+  const dropPending = (id) => { S.pending.filter((x) => x.id === id).forEach((x) => { try { URL.revokeObjectURL(x.thumbUrl); } catch (e) { /* уже освобождено */ } }); S.pending = S.pending.filter((x) => x.id !== id); };
   function deletePhoto(it) {
+    if (!canDelPhoto(it)) { toast('Удалить фото может только его автор' + (it && it.author ? ': ' + it.author : '')); return; }
     openModal('<h3>Удалить фото?</h3><p class="sub">Оно исчезнет у всех в группе. Это нельзя отменить.</p>' +
       '<div class="row"><button class="btn btn-secondary" id="pdCancel" type="button">Отмена</button><button class="btn btn-danger" id="pdOk" type="button">Удалить</button></div>');
     $('#pdCancel').onclick = closeModal;
     $('#pdOk').onclick = async () => {
       if (it.pending) {
-        await idbDel(it.id).catch(() => {}); S.pending = S.pending.filter((x) => x.id !== it.id);
+        await idbDel(it.id).catch(() => {}); dropPending(it.id);
       } else {
         if (!navigator.onLine) { closeModal(); toast('Нужен интернет, чтобы удалить фото'); return; }
         try {
-          const r = await sb('spot_photos?id=eq.' + it.id, { method: 'DELETE' });
+          const r = await sb('spot_photos?id=eq.' + it.id, { method: 'DELETE', headers: { Prefer: 'return=representation' } });
           if (!r.ok) throw new Error('del ' + r.status);
+          const gone = await r.json().catch(() => []);
+          if (!Array.isArray(gone) || !gone.length) { closeModal(); toast('Удалить фото может только его автор'); return; }
           S.photos = S.photos.filter((x) => x.id !== it.id); savePhotos();
-          storage('DELETE', 'object/photos', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [it.path, thumbPath(it.path)] }) }).catch(() => { S.ptomb.push(it.path); savePhotos(); });
+          // файл: если удалить сразу не вышло (сеть или ответ с ошибкой), повторим при синхронизации
+          const later = () => { if (!S.ptomb.includes(it.path)) { S.ptomb.push(it.path); savePhotos(); } };
+          storage('DELETE', 'object/photos', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [it.path, thumbPath(it.path)] }) }).then((x) => { if (!x.ok) later(); }).catch(later);
         } catch (e) { closeModal(); toast('Не удалось удалить, попробуйте позже'); return; }
       }
       closeModal(); closeViewer(); renderPhotoStrip(); toast('Фото удалено');
@@ -1420,8 +1518,7 @@
   function dropSpotPhotos(spotId) {
     S.photos.filter((x) => x.spot_id === spotId).forEach((x) => S.ptomb.push(x.path));
     S.photos = S.photos.filter((x) => x.spot_id !== spotId);
-    S.pending.filter((x) => x.spot_id === spotId).forEach((x) => idbDel(x.id).catch(() => {}));
-    S.pending = S.pending.filter((x) => x.spot_id !== spotId);
+    S.pending.filter((x) => x.spot_id === spotId).forEach((x) => { idbDel(x.id).catch(() => {}); dropPending(x.id); });
     savePhotos();
   }
   function hydrateListThumbs(box, arr) {
@@ -1433,7 +1530,8 @@
       th.innerHTML = ''; th.appendChild(im);
     });
   }
-  async function syncPhotos() {
+  async function syncPhotos(sameCode) {
+    sameCode = sameCode || (() => true);
     for (const path of S.ptomb.slice()) {
       const r = await storage('DELETE', 'object/photos', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [path, thumbPath(path)] }) });
       if (r.ok) { S.ptomb = S.ptomb.filter((x) => x !== path); savePhotos(); }
@@ -1441,24 +1539,31 @@
     const items = await idbAll().catch(() => []);
     let failed = 0;
     for (const it of items) {
-      if (!findSpot(it.spot_id)) { await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id); continue; }
+      const sp = findSpot(it.spot_id);
+      if (!sp) { await idbDel(it.id); dropPending(it.id); continue; }
+      // точки ещё нет на сервере (не отправилась или база её не приняла): фото ждёт, иначе строка фото не запишется и фото потеряется
+      if (sp.dirty && !sp.srv) continue;
       try {
         const path = it.spot_id + '/' + it.id + '.jpg', hd = { 'Content-Type': 'image/jpeg', 'x-upsert': 'true' };
         let r = await storage('POST', 'object/photos/' + thumbPath(path), { headers: hd, body: it.thumb });
         if (!r.ok) throw new Error('thumb ' + r.status);
         r = await storage('POST', 'object/photos/' + path, { headers: hd, body: it.full });
         if (!r.ok) throw new Error('photo ' + r.status);
-        r = await sb('spot_photos?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: [{ id: it.id, spot_id: it.spot_id, path: path, author: it.author || '', created_at: new Date(it.created).toISOString() }] });
-        if (!r.ok && r.status !== 409) throw new Error('row ' + r.status);
+        // повтор той же строки (ответ потерялся) проходит без ошибки благодаря ignore-duplicates;
+        // любая ошибка, в том числе 409 «нет точки», оставляет фото в очереди
+        r = await sb('spot_photos?on_conflict=id', { method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+          body: [{ id: it.id, spot_id: it.spot_id, path: path, author: it.author || '', author_id: it.owner || S.dev, created_at: new Date(it.created).toISOString() }] });
+        if (!r.ok) throw new Error('row ' + r.status);
         cachePut(path, it.full); cachePut(thumbPath(path), it.thumb);
-        await idbDel(it.id); S.pending = S.pending.filter((x) => x.id !== it.id);
+        await idbDel(it.id); dropPending(it.id);
       } catch (e) { failed++; }
     }
     const r2 = await sb('spot_photos?select=*&order=created_at.asc');
     if (!r2.ok) throw new Error('photos ' + r2.status);
     const ids = new Set(S.spots.map((x) => x.id));
-    S.photos = (await r2.json()).filter((x) => ids.has(x.spot_id)); savePhotos();
+    const prow = await r2.json();
+    if (!sameCode()) return;
+    S.photos = prow.filter((x) => ids.has(x.spot_id)); savePhotos();
     if (failed) throw new Error('upload failed: ' + failed);
   }
   idbAll().then((items) => {
@@ -1510,12 +1615,14 @@
     $('#cdOk').onclick = () => {
       const c = S.comments.find((x) => x.id === id);
       S.comments = S.comments.filter((x) => x.id !== id);
-      if (c && !c.dirty) S.ctomb.push(id);
+      // даже неотправленный отзыв мог уйти на сервер прямо сейчас: удаляем и там (лишний запрос безвреден)
+      if (c) S.ctomb.push(id);
       saveComments(); closeModal(); renderComments(); scheduleSync(0);
     };
   }
   function dropSpotComments(spotId) { S.comments = S.comments.filter((c) => c.spot_id !== spotId); saveComments(); }
-  async function syncComments() {
+  async function syncComments(sameCode) {
+    sameCode = sameCode || (() => true);
     for (const id of S.ctomb.slice()) {
       const r = await sb('spot_comments?id=eq.' + id, { method: 'DELETE' });
       if (!r.ok && !(r.status >= 400 && r.status < 500 && r.status !== 401 && r.status !== 403)) throw new Error('cdel ' + r.status);
@@ -1537,8 +1644,10 @@
     }
     const r2 = await sb('spot_comments?select=*&order=created_at.asc');
     if (!r2.ok) throw new Error('cpull ' + r2.status);
+    const crows = await r2.json();
+    if (!sameCode()) return;
     const gone = new Set(S.ctomb);
-    const rows = (await r2.json()).filter((x) => ids.has(x.spot_id) && !gone.has(x.id))
+    const rows = crows.filter((x) => ids.has(x.spot_id) && !gone.has(x.id))
       .map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author || '', owner: x.author_id || '', body: x.body, created: Date.parse(x.created_at) }));
     S.comments = rows.concat(S.comments.filter((c) => c.dirty && ids.has(c.spot_id))); saveComments();
   }
@@ -1609,11 +1718,10 @@
   };
   function goTo(lat, lon, label, zoom) {
     closeSearch();
-    const dup = allSpots().find((x) => Math.abs(x.lat - lat) < 0.0001 && Math.abs(x.lon - lon) < 0.0001);
+    const dup = allSpots().find((x) => Math.abs(x.lat - lat) < DUP_DEG && Math.abs(x.lon - lon) < DUP_DEG);
     if (dup) { openSpot(dup.id, 'half'); toast('Это ваша сохранённая точка'); return; }
     map.setView([lat, lon], zoom || 14, { animate: false });
-    openTemp(L.latLng(lat, lon));
-    if (label) { S.temp.label = String(label).slice(0, 60); renderSheet('peek'); }
+    openTemp(L.latLng(lat, lon), label);
   }
   function renderSearch(msg) {
     const q = sInput.value.trim(), rows = [];
@@ -1718,6 +1826,13 @@
   mo.observe(sPanel, { attributes: true, attributeFilter: ['hidden'] });
   mo.observe(document.body, { childList: true });
 
+  function updateWxProtect() {
+    wxProtect = new Set();
+    S.spots.slice(0, 300).forEach((s) => { wxProtect.add('fishmap.wx.' + (+s.lat).toFixed(2) + ',' + (+s.lon).toFixed(2)); wxProtect.add(histKey(+s.lat, +s.lon)); });
+  }
+  // подсказка «Тапните по карте» нужна только новичку: прячем, когда есть точки или по карте уже тапали
+  function updateHint() { const h = $('#hint'); if (h) h.hidden = S.spots.length > 0 || !!lsGet('fishmap.hintSeen', false); }
+
   /* ---------- deep link: #p=lat,lon,name ---------- */
   async function checkHash() {
     const m = /^#p=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(.*)$/.exec(location.hash);
@@ -1725,14 +1840,15 @@
     // точка из ссылки, скорее всего, уже есть в группе: сначала дождаться синхронизации, иначе получится дубль
     if (S.code && navigator.onLine !== false && S.sync.state !== 'ok') {
       toast('Ищу точку в группе…', 4000);
-      try { await Promise.race([syncNow(), new Promise((r) => setTimeout(r, 6000))]); } catch (e) { /* покажем как новую */ }
+      const job = (async () => { await waitIdle(6000); if (S.sync.state !== 'ok') await syncNow(); })();
+      try { await Promise.race([job, new Promise((r) => setTimeout(r, 6000))]); } catch (e) { /* покажем как новую */ }
     }
     const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
     let name = '';
     try { name = decodeURIComponent(m[3]).slice(0, 60); } catch (e) {}
     history.replaceState(null, '', location.pathname + location.search);
     if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
-    const dup = allSpots().find((s) => Math.abs(s.lat - lat) < 0.0002 && Math.abs(s.lon - lon) < 0.0002);
+    const dup = allSpots().find((s) => Math.abs(s.lat - lat) < DUP_DEG && Math.abs(s.lon - lon) < DUP_DEG);
     if (dup) { map.setView([dup.lat, dup.lon], Math.max(map.getZoom(), 13)); openSpot(dup.id, 'half'); return; }
     map.setView([lat, lon], 14);
     // не сохраняем сразу: показываем как временную точку с названием, сохранить можно кнопкой
@@ -1746,22 +1862,44 @@
     try { const r = await fetch('spots.json', { cache: 'no-cache' }); cfg = await r.json(); } catch (e) {}
     S.shared = (cfg.spots || []).map((s) => Object.assign({}, s, { shared: true, created: s.created || 0 }));
     S.shared.forEach((s) => { if (!findSpot(s.id)) S.spots.push(s); });
+    updateWxProtect(); pruneCache(120);
     fitMinZoom();
     map.setView(cfg.center || [51.0447, -114.0719], cfg.zoom || 10);
     renderMarkers();
-    if (S.spots.length > 1) map.fitBounds(L.latLngBounds(S.spots.map((s) => [s.lat, s.lon])).pad(0.25));
-    else if (S.spots.length === 1) map.setView([S.spots[0].lat, S.spots[0].lon], 12);
+    // стартовый масштаб по точкам текущего сезона (скрытые точки другого сезона не растягивают карту)
+    const vis = seasonSpots().length ? seasonSpots() : S.spots;
+    if (vis.length > 1) map.fitBounds(L.latLngBounds(vis.map((s) => [s.lat, s.lon])).pad(0.25), { maxZoom: 13 });
+    else if (vis.length === 1) map.setView([vis[0].lat, vis[0].lon], 12);
+    updateHint();
     checkJoin(); checkHash();
     refreshAutoSeason();
     window.addEventListener('hashchange', () => { checkJoin(); checkHash(); });
     if (S.code) syncNow();
     if ('serviceWorker' in navigator) {
-      const hadCtl = !!navigator.serviceWorker.controller; let reloaded = false;
+      const hadCtl = !!navigator.serviceWorker.controller; let reloaded = false, pendingReload = false;
+      // новая версия применяется перезагрузкой, но не посреди дела: не при сжатии фото, не при наборе текста,
+      // не при открытом окне или просмотре фото. При открытой панели или списке ждём, пока приложение свернут.
+      const tryReload = () => {
+        if (!pendingReload || reloaded || photoBusy) return;
+        const a = document.activeElement, typing = a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT') && a.type !== 'file';
+        const draft = $('#cmText') && $('#cmText').value.trim();
+        if (typing || draft || !modal.hidden || $('#viewer')) return;
+        if (!document.hidden && anyOverlay()) return;
+        if (flushDescr) flushDescr();
+        reloaded = true; location.reload();
+      };
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (!hadCtl || reloaded) return;
-        const a = document.activeElement, typing = a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT');
-        if (typing || !$('#modal').hidden) { toast('Вышла новая версия, она применится при следующем открытии'); return; }
-        reloaded = true; location.reload();
+        pendingReload = true; tryReload();
+        if (reloaded) return;
+        toast('Вышла новая версия, она применится, когда вы закончите или свернёте приложение', 4000);
+        document.addEventListener('visibilitychange', tryReload);
+        // следим за закрытием окон, панели и списка только пока ждём перезагрузку
+        const ob = new MutationObserver(tryReload);
+        [sheet, lv, modal, menu, sPanel].forEach((el) => ob.observe(el, { attributes: true, attributeFilter: ['class', 'hidden'] }));
+        ob.observe(document.body, { childList: true });
+        document.addEventListener('focusout', () => setTimeout(tryReload, 300));
+        setInterval(tryReload, 5000);   // окончание сжатия фото
       });
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }

@@ -1,5 +1,5 @@
 // Сервис-воркер: приложение и карта работают без интернета
-const SHELL = 'fishmap-shell-v26';
+const SHELL = 'fishmap-shell-v27';
 const TILES = 'fishmap-tiles-v1';
 const PHOTOS = 'fishmap-photos-v1'; // фото из группы, их нельзя удалять при обновлении
 const MAX_TILES = 3000;
@@ -7,7 +7,7 @@ const TILE_HOSTS = ['tile.openstreetmap.org', 'tile.opentopomap.org'];
 
 const ASSETS = [
   './', './index.html', './app.css', './app.js', './spots.json', './manifest.webmanifest',
-  './icon-192.png', './icon-512.png',
+  './icon-192.png', './icon-512.png', './icon-maskable-512.png',
   './leaflet.js', './leaflet.css', './layers.png', './layers-2x.png',
   './inter-latin.woff2', './inter-cyrillic.woff2'
 ];
