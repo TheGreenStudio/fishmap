@@ -23,8 +23,10 @@
     <span data-ic="list" data-size="22"></span><span>Точки</span><span id="count" class="badge">0</span>
   </button>
   <button id="bLayers" class="fab fab-layers" type="button" aria-label="Слои и настройки"><span data-ic="layers"></span></button>
+  <button id="bFilter" class="fab fab-filter" type="button" aria-label="Фильтр точек: типы, детская площадка, сезон"><span data-ic="filter"></span><span id="fDot" class="fdot" hidden></span></button>
   <button id="bSearch" class="fab fab-search" type="button" aria-label="Поиск по карте"><span data-ic="search"></span></button>
   <button id="bLocate" class="fab fab-locate" type="button" aria-label="Где я"><span data-ic="locate"></span></button>
+  <div id="fBar" class="fbar" role="status" hidden></div>
 </div>
 
 <section id="searchPanel" class="spanel" hidden aria-label="Поиск">
@@ -37,6 +39,7 @@
 </section>
 
 <div id="layerMenu" class="menu" hidden></div>
+<div id="filterMenu" class="menu fmenu" hidden aria-label="Фильтр точек"></div>
 <div id="hint" class="hint"><span data-ic="plus" data-size="18" data-sw="2.2"></span><span>Тапните по карте, чтобы увидеть погоду и сохранить точку</span></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
