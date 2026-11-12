@@ -18,7 +18,7 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Ping Supabase
         run: |
           curl -fsS -X POST "https://caxuvdrzuurhdtmqbkbg.supabase.co/rest/v1/rpc/group_check" \
