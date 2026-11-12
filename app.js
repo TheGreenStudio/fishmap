@@ -111,7 +111,34 @@
     return arr.filter((s) => s && typeof s === 'object' && typeof s.id === 'string' && Number.isFinite(+s.lat) && Number.isFinite(+s.lon) && Math.abs(s.lat) <= 90 && Math.abs(s.lon) <= 180)
       .map((s) => Object.assign(s, { lat: +s.lat, lon: +s.lon, name: typeof s.name === 'string' && s.name.trim() ? s.name : 'Без названия', season: (s.season === 'summer' || s.season === 'winter' || s.season === 'both') ? s.season : undefined }));
   }
-  const saveLocal = () => { lsSet(KEY, S.spots.filter((s) => !s.shared)); lsSet('fishmap.v3.tomb', S.tomb); };
+  // Две копии приложения (вкладка и установленное) делят память телефона: перед записью забираем
+  // неотправленные точки и удаления другой копии, иначе запись целиком стёрла бы их.
+  // что эта копия сама записала последним: так отличаем свою прошлую запись от записи другой копии
+  const sigOf = (x) => JSON.stringify([x.updated || 0, !!x.dirty, x.name, x.note || '', x.season || '']);
+  let lastSaved = new Map();
+  function mergeForeignSpots() {
+    const storedTomb = lsGet('fishmap.v3.tomb', []);
+    if (Array.isArray(storedTomb)) storedTomb.forEach((id) => { if (!S.tomb.includes(id)) S.tomb.push(id); });
+    const tomb = new Set(S.tomb);
+    if (tomb.size) S.spots = S.spots.filter((x) => !tomb.has(x.id));
+    const stored = lsGet(KEY, []), ids = new Set(S.spots.map((x) => x.id));
+    let changed = false;
+    if (Array.isArray(stored)) stored.forEach((x) => {
+      if (!x || typeof x.id !== 'string' || tomb.has(x.id) || !Number.isFinite(+x.lat) || !Number.isFinite(+x.lon)) return;
+      if (lastSaved.get(x.id) === sigOf(x)) return;   // это наша собственная прошлая запись
+      const mine = ids.has(x.id) ? findSpot(x.id) : null;
+      if (!mine && x.dirty && !x.srv) { S.spots.push(x); changed = true; }            // новая точка из другой копии, ещё не на сервере
+      // правка из другой копии: берём, если у нас эта точка не правилась или наша правка старше (часы одного телефона)
+      else if (mine && x.dirty && (!mine.dirty || (x.updated || 0) > (mine.updated || 0))) { Object.assign(mine, x); changed = true; }
+    });
+    return changed;
+  }
+  const saveLocal = () => {
+    mergeForeignSpots();
+    const list = S.spots.filter((s) => !s.shared);
+    lsSet(KEY, list); lsSet('fishmap.v3.tomb', S.tomb);
+    lastSaved = new Map(list.map((x) => [x.id, sigOf(x)]));
+  };
   const touch = (s) => { s.dirty = true; s.updated = Date.now(); saveLocal(); scheduleSync(); };
   const allSpots = () => S.spots;
   const findSpot = (id) => S.spots.find((s) => s.id === id);
@@ -826,11 +853,17 @@
   })();
 
   let ignoreMapClick = false;
+  // одиночный тап открывает точку с небольшой задержкой: если это двойной тап (приближение карты), точку не открываем
+  let tapT = 0;
   map.on('click', (e) => {
     if (ignoreMapClick) return;
-    if (!lsGet('fishmap.hintSeen', false)) { lsSet('fishmap.hintSeen', true); updateHint(); }
-    openTemp(e.latlng);
+    clearTimeout(tapT);
+    tapT = setTimeout(() => {
+      if (!lsGet('fishmap.hintSeen', false)) { lsSet('fishmap.hintSeen', true); updateHint(); }
+      openTemp(e.latlng);
+    }, 300);
   });
+  map.on('dblclick zoomstart', () => clearTimeout(tapT));
   window.addEventListener('resize', () => { layoutSheet(); });
 
   /* ---------- modal ---------- */
@@ -838,7 +871,7 @@
   function openModal(html) { mcard.innerHTML = html; modal.hidden = false; }
   function closeModal() { modal.hidden = true; mcard.innerHTML = ''; }
   modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!modal.hidden) closeModal(); else if (!menu.hidden) closeMenu(); } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (!modal.hidden) closeModal(); else if ($('#viewer')) closeViewer(); else if (!menu.hidden) closeMenu(); } });
 
   let toastT;
   function toast(msg, ms) {
@@ -1584,8 +1617,34 @@
 
   /* ---------- отзывы ---------- */
   S.comments = lsGet('fishmap.v3.comments', []);
+  if (!Array.isArray(S.comments)) S.comments = [];
   S.ctomb = lsGet('fishmap.v3.ctomb', []);
-  const saveComments = () => { lsSet('fishmap.v3.comments', S.comments); lsSet('fishmap.v3.ctomb', S.ctomb); };
+  let lastSavedC = new Set();   // id отзывов, которые эта копия записала последним
+  function mergeForeignComments() {
+    const st = lsGet('fishmap.v3.ctomb', []);
+    if (Array.isArray(st)) st.forEach((id) => { if (!S.ctomb.includes(id)) S.ctomb.push(id); });
+    const gone = new Set(S.ctomb), ids = new Set(S.comments.map((c) => c.id));
+    S.comments = S.comments.filter((c) => !gone.has(c.id));
+    const stored = lsGet('fishmap.v3.comments', []);
+    let changed = false;
+    if (Array.isArray(stored)) stored.forEach((c) => { if (c && c.id && c.dirty && !ids.has(c.id) && !gone.has(c.id) && !lastSavedC.has(c.id)) { S.comments.push(c); changed = true; } });
+    return changed;
+  }
+  const saveComments = () => {
+    mergeForeignComments(); lsSet('fishmap.v3.comments', S.comments); lsSet('fishmap.v3.ctomb', S.ctomb);
+    lastSavedC = new Set(S.comments.map((c) => c.id));
+  };
+  lastSavedC = new Set(S.comments.map((c) => c.id));
+  // изменения из другой копии приложения сразу видны и здесь
+  window.addEventListener('storage', (e) => {
+    if (e.key === KEY || e.key === 'fishmap.v3.tomb') {
+      const before = S.spots.length, had = S.sel && findSpot(S.sel);
+      if (mergeForeignSpots() || S.spots.length !== before) { renderMarkers(); if (lv.classList.contains('open')) renderListItems(); }
+      if (had && !findSpot(S.sel)) closeSheet();
+    } else if (e.key === 'fishmap.v3.comments' || e.key === 'fishmap.v3.ctomb') {
+      if (mergeForeignComments()) renderComments();
+    }
+  });
   const plural = (n, a, b, c) => { const m = n % 100, d = n % 10; return (m > 10 && m < 15) ? c : d === 1 ? a : (d > 1 && d < 5) ? b : c; };
   const commentsOf = (id) => S.comments.filter((c) => c.spot_id === id).sort((a, b) => a.created - b.created);
   const nc = (id) => S.comments.reduce((n, c) => n + (c.spot_id === id ? 1 : 0), 0);
@@ -1807,8 +1866,8 @@
 
   /* ---------- кнопка «Назад» (Android / жест): закрывает верхнее окно, а не выходит из приложения ---------- */
   const overlays = [   // сверху вниз
+    [() => !modal.hidden, closeModal],          // окно подтверждения лежит поверх просмотра фото
     [() => !!$('#viewer'), () => closeViewer()],
-    [() => !modal.hidden, closeModal],
     [() => !menu.hidden, closeMenu],
     [() => !sPanel.hidden, closeSearch],
     [() => lv.classList.contains('open'), closeList],
@@ -1843,7 +1902,7 @@
 
   // вид карты и открытая точка переживают перезагрузку при обновлении приложения
   function saveView() {
-    try { const c = map.getCenter(); sessionStorage.setItem('fishmap.view', JSON.stringify({ lat: c.lat, lon: c.lng, z: map.getZoom(), sel: S.sel, t: Date.now() })); } catch (e) { /* не критично */ }
+    try { const c = map.getCenter(); sessionStorage.setItem('fishmap.view', JSON.stringify({ lat: c.lat, lon: c.lng, z: map.getZoom(), sel: S.sel, temp: S.temp, t: Date.now() })); } catch (e) { /* не критично */ }
   }
   function takeView() {
     try {
@@ -1883,6 +1942,7 @@
   /* ---------- init ---------- */
   (async function init() {
     S.spots = loadLocal();
+    lastSaved = new Map(S.spots.map((x) => [x.id, sigOf(x)]));
     let cfg = { center: [51.0447, -114.0719], zoom: 10, spots: [] };
     try { const r = await fetch('spots.json', { cache: 'no-cache' }); cfg = await r.json(); } catch (e) {}
     S.shared = (cfg.spots || []).map((s) => Object.assign({}, s, { shared: true, created: s.created || 0 }));
@@ -1899,6 +1959,7 @@
     else if (vis.length === 1) map.setView([vis[0].lat, vis[0].lon], 12);
     S.viewRestored = !!saved;
     if (saved && saved.sel && findSpot(saved.sel)) openSpot(saved.sel, 'peek');
+    else if (saved && saved.temp && isFinite(saved.temp.lat) && isFinite(saved.temp.lon)) openTemp(L.latLng(saved.temp.lat, saved.temp.lon), saved.temp.label);
     updateHint();
     checkJoin(); checkHash();
     refreshAutoSeason();

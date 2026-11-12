@@ -58,8 +58,8 @@ body.is-offline .fab-locate{top:calc(192px + var(--safe-t))}
 #hint[hidden]{display:none}
 body.sheet-open .hint,body.list-open .hint{opacity:0;pointer-events:none;transform:translateY(10px)}
 
-.toast{position:fixed;z-index:900;left:50%;bottom:24px;transform:translate(-50%,8px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:20px;font-size:14px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:90vw;text-align:center}
-.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast{position:fixed;z-index:1100;left:0;right:0;margin:0 auto;width:fit-content;bottom:24px;transform:translateY(8px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:20px;font-size:14px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:min(560px,calc(100vw - 32px));text-align:center}
+.toast.show{opacity:1;transform:translateY(0)}
 
 /* menu */
 .menu{position:fixed;z-index:650;right:16px;top:calc(76px + var(--safe-t));width:min(320px,calc(100vw - 32px));background:var(--surface);border-radius:20px;box-shadow:0 8px 32px var(--shadow);padding:14px}
