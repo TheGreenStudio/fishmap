@@ -114,3 +114,10 @@ test('запросы погоды и истории совпадают с app.js
     assert.ok(APP.includes(p) && DIGEST.includes(p), p);
   }
 });
+
+test('типы точек совпадают с app.js (рыбалка по умолчанию)', () => {
+  const appTypes = Object.keys(Function(`return ${APP.match(/const TYPES = (\{[^}]*\})/)[1]}`)()).join(',');
+  const botTypes = DIGEST.match(/const SPOT_KINDS = \[([^\]]*)\]/)[1].replace(/['\s]/g, '');
+  assert.equal(botTypes, appTypes, 'список типов точек');
+  assert.ok(strip(APP).includes("type:TYPES[row.kind]?row.kind:'fish'"), 'app.js: незнакомый kind считается рыбалкой');
+});

@@ -343,13 +343,24 @@ const histFor = (lat, lon) => {
   return histCache.get(k);
 };
 
+// Тип точки, как в приложении: fish (рыбалка), camp (кэмпинг), poi (интересное место).
+// В базе поле kind, в spots.json kind или type; нет поля или незнакомое значение: рыбалка.
+const SPOT_KINDS = ['fish', 'camp', 'poi'];
+export const spotKind = (s) => { const k = s.kind || s.type; return SPOT_KINDS.includes(k) ? k : 'fish'; };
+
+// Точки для блока клёва: только рыбалка (кэмпинги и интересные места не оцениваются) и только текущего сезона.
+export function fishSpotsInSeason(spots, winter) {
+  const season = winter ? 'winter' : 'summer';
+  return spots.filter((s) => spotKind(s) === 'fish' && ['both', season].includes(s.season || 'summer'));
+}
+
 async function spotsBlock() {
   const spots = await loadSpots();
   // сезон карты: как «Авто» в приложении, по погоде и морозам в центре карты
   const winter = (await centerCtx()).autoIce;
-  const season = winter ? 'winter' : 'summer';
-  const inSeason = spots.filter((s) => { const q = s.season || 'summer'; return q === 'both' || q === season; });
-  console.log(`Клёв: точек всего ${spots.length}, в сезоне «${winter ? 'зима' : 'лето'}» ${inSeason.length}`);
+  const inSeason = fishSpotsInSeason(spots, winter);
+  const fish = spots.filter((s) => spotKind(s) === 'fish').length;
+  console.log(`Клёв: точек всего ${spots.length}, рыбалка ${fish}, в сезоне «${winter ? 'зима' : 'лето'}» ${inSeason.length}`);
   if (!inSeason.length) return { text: null, failed: 0 };   // точек на этот сезон нет: блок молча пропадает (решение владельца)
 
   const scored = [];
