@@ -36,8 +36,17 @@ test('Слова deadline и shares не блокируют', () => {
   assert.ok(passesFilters(AB, it('Anglers shares tips on Alberta walleye fishing')));
 });
 
-test('Мёртвое/акции блокируются', () => {
-  assert.ok(!passesFilters(AB, it('Dead fish found at Alberta lake, anglers concerned')));
+test('Происшествия с людьми блокируются, замор рыбы нет', () => {
+  assert.ok(!passesFilters(AB, it('Angler found dead near Alberta lake')));
+  assert.ok(!passesFilters(AB, it('Alberta angler dies after falling through ice')));
+  assert.ok(passesFilters(AB, it('Dead fish found at Alberta lake, anglers concerned')));
+  assert.ok(passesFilters(AB, it('Fish die-off reported at Pigeon Lake')));
+  assert.ok(passesFilters(CA, it('Fish kill on Saskatchewan river under investigation')));
+});
+
+test('First Nation и ГЭС больше не отсекаются', () => {
+  assert.ok(passesFilters(AB, it('First Nation and Alberta partner on walleye stocking', 'Edmonton Journal')));
+  assert.ok(passesFilters(CA, it('B.C. hydro dam flows threaten sturgeon spawning, anglers say', 'CBC')));
 });
 
 test('sameStory: одна история', () => {

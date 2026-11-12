@@ -71,10 +71,11 @@ export function inRegion(section, title, source = '') {
 // Слова «fish/angl» нет в части заголовков (например «Prussian carp», «Big Jack Classic»), поэтому список шире.
 export const MUST = /fish|angl|trout|walleye|pike|carp|sturgeon|whitefish|perch|grayling|burbot|bass\b|salmon|steelhead|big jack|derby|stocking|lake trout|tackle/i;
 // Статья должна быть про рыбалку по существу, а не просто упоминать воду или еду.
-export const STRONG = /angler|angling|ice fishing|fishing (ban|closure|rules?|regulations?|licen[cs]e|season|derby|tournament|report|limits?)|\bdfo\b|fisheries and oceans|stocking|derby|big jack|invasive|carp|walleye|trout|\bpike\b|sturgeon|whitefish|burbot|grayling|steelhead|conservation officer|fined|fines\b/i;
+export const STRONG = /angler|angling|ice fishing|fishing (ban|closure|rules?|regulations?|licen[cs]e|season|derby|tournament|report|limits?)|\bdfo\b|fisheries and oceans|stocking|derby|big jack|invasive|carp|walleye|trout|\bpike\b|sturgeon|whitefish|burbot|grayling|steelhead|conservation officer|fined|fines\b|die-?off|fish kill|dead fish/i;
 // Путевые заметки и подборки не нужны.
 export const TRAVEL = /village|lighthouse|best places|top \d+|things to do|travel|vacation|resort|getaway|charming|bucket list|destinations?|itinerary|road trip|hidden gem|must[- ]visit|hotels?\b/i;
-export const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|prawn|clam|mussel|sea cucumber|urchin|geoduck|abalone|sponge reef|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b|\bdead\b|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|share price|shares (?:rise|rose|fall|fell|jump|drop|surge)|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|first nation|pipeline|hydro|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
+// Замор рыбы (die-off, dead fish), новости с First Nation и про ГЭС не отсекаются: решение владельца 12.11.2026.
+export const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|prawn|clam|mussel|sea cucumber|urchin|geoduck|abalone|sponge reef|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b(?!-?off)|\bdead\b(?! fish)|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|share price|shares (?:rise|rose|fall|fell|jump|drop|surge)|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|pipeline|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
 
 // Подходит ли заголовок для раздела целиком.
 export function passesFilters(section, item) {
