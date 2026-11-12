@@ -6,7 +6,8 @@
 //
 // Переменные окружения:
 //   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  куда отправлять (секреты GitHub)
-//   SUPABASE_GROUP_CODE  код группы для чтения наших точек (секрет GitHub); без него блок «Клёв» пропускается
+//   SUPABASE_GROUP_CODE  код группы для чтения наших точек (секрет GitHub); без него блок «Клёв» выпадает,
+//                        сводка уходит, а запуск помечается ошибкой (письмо от GitHub)
 //   DRY_RUN=1     только напечатать сообщение, ничего не отправлять
 //   FORCE=1       игнорировать проверку времени и «уже отправляли сегодня»
 //   SAVE_STATE=1  запомнить отправленные новости и дату (для боевых запусков)
@@ -67,24 +68,32 @@ const ruDay = (ymd) =>
   new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', day: 'numeric', month: 'long' })
     .format(new Date(`${ymd}T12:00:00Z`));
 
-async function getText(url, fixture, headers = {}) {
-  if (FIXTURES) return fs.readFileSync(`${FIXTURES}/${fixture}`, 'utf8');
+// Запрос с одним повтором. Повторяем только то, что похоже на временный сбой: обрыв связи, таймаут, 429, 5xx.
+// Ответы вроде 401/403/404 не повторяем: второй раз будет то же самое.
+export async function request(url, { method = 'GET', headers = {}, body } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const r = await fetch(url, {
+        method, body,
         headers: { 'user-agent': 'Mozilla/5.0 (compatible; WildFishingDigest/1.0)', ...headers },
         signal: AbortSignal.timeout(budgetTimeout(10000)),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; }
       return await r.text();
     } catch (e) {
       lastErr = e;
-      if (attempt === 2 || timeLeft() <= 2500) break;   // бюджет на исходе: повторять нет смысла
+      const transient = !e.status || e.status === 429 || e.status >= 500;
+      if (!transient || attempt === 2 || timeLeft() <= 2500) break;   // бюджет на исходе: повторять нет смысла
       await new Promise((res) => setTimeout(res, 1000));
     }
   }
   throw lastErr;
+}
+
+async function getText(url, fixture, headers = {}) {
+  if (FIXTURES) return fs.readFileSync(`${FIXTURES}/${fixture}`, 'utf8');
+  return request(url, { headers });
 }
 
 // ---------- новости ----------
@@ -298,17 +307,24 @@ export function weatherText(d, today, ctx) {
 const SB_URL = 'https://caxuvdrzuurhdtmqbkbg.supabase.co';
 const SB_KEY = 'sb_publishable_gS7j7lRfJV5rz-nr6AzV7g_Q9lfGNzt'; // публичный ключ, как в приложении
 
-async function loadSpots() {
+export async function loadSpots() {
   const code = E.SUPABASE_GROUP_CODE;
   if (!code && !FIXTURES) throw new Error('не задан секрет SUPABASE_GROUP_CODE');
   const headers = { apikey: SB_KEY, 'x-group-code': code || '' };
   let rows = [];
   if (FIXTURES) rows = JSON.parse(fs.readFileSync(`${FIXTURES}/spots_db.json`, 'utf8'));
   else {
-    const chk = await fetch(`${SB_URL}/rest/v1/rpc/group_check`, {
-      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(budgetTimeout(10000)),
-    });
-    if (!chk.ok || (await chk.json()) !== true) throw new Error('код группы не подошёл');
+    // Проверка кода группы с повтором при сбое сети; «код не подошёл» (false, 401, 403) не повторяем.
+    let ok;
+    try {
+      ok = JSON.parse(await request(`${SB_URL}/rest/v1/rpc/group_check`, {
+        method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}',
+      }));
+    } catch (e) {
+      if (e.status === 401 || e.status === 403) throw new Error('код группы не подошёл');
+      throw e;
+    }
+    if (ok !== true) throw new Error('код группы не подошёл');
     rows = JSON.parse(await getText(`${SB_URL}/rest/v1/spots?select=*&order=created_at.asc`, '', headers));
   }
   // точки из spots.json в репозитории считаются «Оба сезона»
