@@ -18,11 +18,16 @@ import { pathToFileURL } from 'node:url';
 import { fishCtx, fishDay } from './fishscore.mjs';
 import { norm, SECTIONS, passesFilters, alreadySent, cleanSummary, extractMeta, pageMatchesTitle, pickWithSummary } from './filters.mjs';
 
-// Альберта с ноября 2026 живёт на постоянном летнем времени (UTC-6 круглый год).
-// Старая база часовых поясов (Node 20 на раннере GitHub) об этом не знала и считала время на час раньше
-// (проверено запуском 2026-11-11), поэтому местное время считаем по фиксированному поясу, а не по 'America/Edmonton'.
-// Если Альберта снова начнёт переводить часы, поменять здесь.
-const TZ = 'Etc/GMT+6';
+// Альберта с ноября 2026 живёт на постоянном UTC-6 (правило вошло в базу часовых поясов IANA, версия 2026c).
+// Если база в Node не старше 2026c, считаем время по 'America/Edmonton': будущие изменения правил
+// подхватятся сами, когда GitHub обновит Node на раннерах. Со старой базой (так было на раннере с Node 20,
+// tzdata 2025c: время на час раньше) берём фиксированный UTC-6.
+// Расписание 13:31 и 14:31 UTC переживает и возврат к зимнему UTC-7: тогда отправит запуск 14:31 (7:31 по Calgary).
+export const TZ_MIN_VERSION = '2026c';
+export function chooseTz(tzVersion) {
+  return tzVersion && tzVersion >= TZ_MIN_VERSION ? 'America/Edmonton' : 'Etc/GMT+6';
+}
+const TZ = chooseTz(process.versions.tz);
 const WEATHER_TZ = 'America/Edmonton';   // только для запросов к Open-Meteo (границы суток, разница не больше часа)
 const LAT = 51.0447;
 const LON = -114.0719;
@@ -53,10 +58,10 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-export function localParts(d) {
+export function localParts(d, tz = TZ) {
   const p = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
-      timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
     }).formatToParts(d).map((x) => [x.type, x.value]),
   );
@@ -496,12 +501,15 @@ function selftest() {
 
 // ---------- главное ----------
 
+// Окно отправки по местному времени: 7:20-12:00.
+export const inSendWindow = (minutes) => minutes >= 7 * 60 + 20 && minutes < 12 * 60;
+
 async function main() {
   const now = new Date();
   const { date: today, minutes } = localParts(now);
 
   if (E.SELFTEST === '1') { selftest(); return; }
-  console.log(`Время в Calgary: ${today} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} (UTC-6; tzdata раннера ${process.versions.tz || 'неизвестно'}, Node ${process.version})`);
+  console.log(`Время в Calgary: ${today} ${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} (пояс ${TZ === 'America/Edmonton' ? 'America/Edmonton' : 'фиксированный UTC-6, база поясов старая'}; tzdata раннера ${process.versions.tz || 'неизвестно'}, Node ${process.version})`);
 
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* первого запуска ещё не было или кэш потерян */ }
@@ -513,7 +521,7 @@ async function main() {
   if (!FORCE) {
     if (state.lastSentDate === today) { console.log('Сегодня уже отправляли, выходим.'); return; }
     // Два cron-запуска (основной и повтор через час): отправляем только в окне 7:20-12:00 по Calgary.
-    if (minutes < 7 * 60 + 20 || minutes >= 12 * 60) { console.log('Не время отправки, выходим.'); return; }
+    if (!inSendWindow(minutes)) { console.log('Не время отправки, выходим.'); return; }
   }
 
   const blocks = [];
