@@ -64,6 +64,8 @@ body.sheet-open .hint,body.list-open .hint{opacity:0;pointer-events:none;transfo
 /* menu */
 .menu{position:fixed;z-index:650;right:16px;top:calc(76px + var(--safe-t));width:min(320px,calc(100vw - 32px));background:var(--surface);border-radius:20px;box-shadow:0 8px 32px var(--shadow);padding:14px}
 body.is-offline .menu{top:calc(140px + var(--safe-t))}
+#layerMenu{max-height:calc(100vh - 92px - var(--safe-t) - var(--safe-b));max-height:calc(100dvh - 92px - var(--safe-t) - var(--safe-b));overflow-y:auto;overscroll-behavior:contain}
+body.is-offline #layerMenu{max-height:calc(100vh - 156px - var(--safe-t) - var(--safe-b));max-height:calc(100dvh - 156px - var(--safe-t) - var(--safe-b))}
 .menu h4{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--muted)}
 .seg{display:flex;background:var(--surface2);border-radius:14px;padding:3px;gap:3px;margin-bottom:14px}
 .seg button{flex:1;height:36px;border-radius:11px;font-size:14px;font-weight:600;color:var(--muted)}
@@ -238,6 +240,13 @@ textarea{resize:none;min-height:96px}
 .input.sm{height:40px;padding:0 12px;border-radius:12px;font-size:14px;flex:2;min-width:0}
 .grp .grow .btn-primary{flex:1}
 .linkbtn{margin-top:8px;font-size:13px;font-weight:500;color:var(--muted);text-decoration:underline;height:32px}
+.linkbtn.hot{background:var(--accent);color:var(--on-accent);text-decoration:none;font-weight:600;border-radius:10px;padding:0 14px}
+.appver{padding:10px 12px;background:var(--surface2);border-radius:12px;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;cursor:default}
+.appver .vs{display:block;font-size:14px;font-weight:600;color:var(--text)}
+.appver[data-s=ok] .vs{color:var(--primary)}
+.appver[data-s=upd] .vs{color:var(--accent-text)}
+.appver[data-s=off] .vs{color:var(--muted)}
+.appver .vd{display:block;font-size:12px;color:var(--muted);margin-top:2px}
 
 /* collapsed (mini) sheet */
 .hbtns{display:flex;align-items:center;gap:8px;flex:none}

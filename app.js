@@ -1061,6 +1061,27 @@
   $('#bLocate').addEventListener('click', () => locate(false));
 
   /* ---------- layers / settings menu ---------- */
+  // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
+  const APP = { v: 30, date: '2026-11-12' };
+  const verDate = (d) => {
+    const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
+    const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
+    return new Date(y, m - 1, dd).toLocaleDateString('ru-RU', o);
+  };
+  let verCheck = null; // последняя успешная проверка, хранится 10 минут
+  async function checkLatest() {
+    if (verCheck && Date.now() - verCheck.at < 600000) return verCheck.latest;
+    if (navigator.onLine === false) throw new Error('offline');
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const r = await fetch('./version.json?chk=' + Date.now(), { cache: 'no-store', signal: ctl.signal });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const j = await r.json();
+      if (!j || !Number.isFinite(j.v)) throw new Error('bad version.json');
+      verCheck = { at: Date.now(), latest: j };
+      return j;
+    } finally { clearTimeout(to); }
+  }
   const menu = $('#layerMenu');
   function closeMenu() { menu.hidden = true; $('#bLayers').classList.remove('on'); }
   function openMenu() {
@@ -1071,7 +1092,9 @@
       '<p class="note">Лето и Зима показывают свои метки и свою формулу клёва. Авто переключается само, когда устанавливаются морозы.</p>' +
       '<h4>Группа</h4><div id="grp" class="grp"></div>' +
       '<p class="note">Карта © OpenStreetMap, OpenTopoMap. Погода: Open-Meteo. Без интернета карта показывает те места, которые вы уже смотрели с интернетом. Откройте нужные озёра и реки по Wi-Fi заранее.</p>' +
-      '<button class="linkbtn" id="bUpdate" type="button">Обновить приложение <span id="ver"></span></button>';
+      '<h4>Приложение</h4><div class="appver" id="appVer" title="Подержите, чтобы увидеть номер сборки"><span class="vs" id="verStat">Проверяем обновления…</span>' +
+      '<span class="vd">Версия от ' + verDate(APP.date) + '<span id="verNum" hidden> · сборка ' + APP.v + '</span></span></div>' +
+      '<button class="linkbtn" id="bUpdate" type="button">Обновить приложение</button>';
     menu.hidden = false; $('#bLayers').classList.add('on');
     const sync = () => {
       menu.querySelectorAll('#segLayer button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.layer)));
@@ -1083,7 +1106,21 @@
     menu.querySelectorAll('#segFishMode button').forEach((b) => b.addEventListener('click', () => { setFishMode(b.dataset.v); sync(); }));
     menu.querySelectorAll('#segTheme button').forEach((b) => b.addEventListener('click', () => { S.theme = b.dataset.v; lsSet('fishmap.theme', S.theme); applyTheme(); sync(); }));
     renderGroup();
-    if ('caches' in window) caches.keys().then((ks) => { const k = ks.find((x) => /shell/.test(x)), el = $('#ver'); if (k && el) el.textContent = '(' + k.replace('fishmap-shell-', '') + ')'; }).catch(() => {});
+    {
+      const box = $('#appVer'), st = $('#verStat'), bU = $('#bUpdate');
+      const setSt = (cls, txt) => { if (!box.isConnected) return; box.dataset.s = cls; st.textContent = txt; };
+      checkLatest().then((j) => {
+        if (j.v > APP.v) {
+          setSt('upd', 'Есть обновление' + (j.date && j.date !== APP.date && verDate(j.date) ? ' от ' + verDate(j.date) : ''));
+          bU.textContent = 'Обновить сейчас'; bU.classList.add('hot');
+        } else setSt('ok', '✓ Последняя версия');
+      }).catch(() => setSt('off', navigator.onLine === false ? 'Нет сети, проверить не удалось' : 'Не удалось проверить обновления'));
+      // номер сборки скрыт: долгое нажатие показывает его (если попросят продиктовать при поиске проблемы)
+      let lp = 0; const lpStop = () => clearTimeout(lp);
+      box.addEventListener('pointerdown', () => { lpStop(); lp = setTimeout(() => { const n = $('#verNum'); if (n) n.hidden = !n.hidden; }, 600); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => box.addEventListener(ev, lpStop));
+      box.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
     $('#bUpdate').addEventListener('click', async () => {
       // без сети обновлять нельзя: после сброса кэша приложение не откроется
       try {
