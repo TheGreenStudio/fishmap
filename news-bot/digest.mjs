@@ -312,7 +312,8 @@ const wxCache = new Map();
 const wxFor = (lat, lon) => {
   const k = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   if (!wxCache.has(k)) {
-    wxCache.set(k, getText('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(2) + '&longitude=' + lon.toFixed(2)
+    // как в приложении: координаты точки без округления, кэш по двум знакам
+    wxCache.set(k, getText('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon
       + '&hourly=pressure_msl&past_hours=24'
       + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset'
       + '&forecast_days=4&timezone=auto&wind_speed_unit=kmh', 'spotwx.json').then(JSON.parse));
@@ -321,9 +322,10 @@ const wxFor = (lat, lon) => {
 };
 const histCache = new Map();
 const histFor = (lat, lon) => {
-  const k = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+  // как в приложении: история температур по координатам с двумя знаками
+  const k = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   if (!histCache.has(k)) {
-    histCache.set(k, getText('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(1) + '&longitude=' + lon.toFixed(1)
+    histCache.set(k, getText('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(2) + '&longitude=' + lon.toFixed(2)
       + '&daily=temperature_2m_max,temperature_2m_min&past_days=30&forecast_days=1&timezone=auto', 'hist.json')
       .then((t) => { const j = JSON.parse(t); return { time: j.daily.time, tmax: j.daily.temperature_2m_max, tmin: j.daily.temperature_2m_min }; }));
   }

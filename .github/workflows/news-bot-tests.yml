@@ -1,13 +1,16 @@
-# Проверки кода бота-сводки: запускаются при каждом изменении папки news-bot (сеть не нужна).
+# Проверки кода бота-сводки: запускаются при каждом изменении папки news-bot и app.js (сеть не нужна).
+# app.js входит, потому что news-bot/fishscore.mjs повторяет формулу клёва приложения: тест appsync падает при расхождении.
 name: news-bot-tests
 on:
   push:
     paths:
       - 'news-bot/**'
+      - 'app.js'
       - '.github/workflows/news-bot-tests.yml'
   pull_request:
     paths:
       - 'news-bot/**'
+      - 'app.js'
 permissions:
   contents: read
 jobs:
