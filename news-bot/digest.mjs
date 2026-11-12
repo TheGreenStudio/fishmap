@@ -1,8 +1,8 @@
 // Ежедневная сводка для Telegram-группы «Дикая Рыбалка».
-// Без внешних зависимостей, Node 20+. Запускается из .github/workflows/daily-digest.yml.
+// Без внешних зависимостей, Node 20+ (на GitHub Node 24). Запускается из .github/workflows/daily-digest.yml.
 //
-// Состав сообщения: погода в Calgary (Open-Meteo), одна новость по Альберте и одна
-// по Канаде (Google News RSS). Текст погоды собирается по правилам, без ИИ.
+// Состав сообщения: погода в Calgary (Open-Meteo), топ-3 наших точек по оценке клёва (формула приложения),
+// одна новость по Альберте и одна по Канаде (Google News RSS). Тексты собираются по правилам, без ИИ.
 //
 // Переменные окружения:
 //   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  куда отправлять (секреты GitHub)
@@ -18,7 +18,7 @@ import { fishCtx, fishDay } from './fishscore.mjs';
 import { norm, SECTIONS, passesFilters, alreadySent, cleanSummary, extractMeta, pageMatchesTitle, pickWithSummary } from './filters.mjs';
 
 // Альберта с ноября 2026 живёт на постоянном летнем времени (UTC-6 круглый год).
-// Версия базы часовых поясов на раннере GitHub (Node 20) об этом не знает и считала бы время на час раньше
+// Старая база часовых поясов (Node 20 на раннере GitHub) об этом не знала и считала время на час раньше
 // (проверено запуском 2026-11-11), поэтому местное время считаем по фиксированному поясу, а не по 'America/Edmonton'.
 // Если Альберта снова начнёт переводить часы, поменять здесь.
 const TZ = 'Etc/GMT+6';
@@ -49,6 +49,7 @@ const MASK_SPOTS = E.MASK_SPOTS ? E.MASK_SPOTS === '1' : !FIXTURES;
 // ---------- вспомогательное ----------
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function localParts(d) {
@@ -111,8 +112,12 @@ function parseRss(xml) {
   }).filter((i) => i.title && i.link && !Number.isNaN(i.date.getTime()));
 }
 
+// Все заголовки, найденные за этот запуск: «Канада» смотрит и то, что нашли запросы «Альберты»
+// (например, новости B.C. по запросу «Alberta fishing»). Регион всё равно проверяется фильтрами раздела.
+const fetchedAll = new Map();
+
 export async function pickNews(section, state, used) {
-  const all = new Map();
+  const all = new Map(fetchedAll);
   const results = await Promise.allSettled(section.queries.map((q) => {
     const url = 'https://news.google.com/rss/search?q='
       + encodeURIComponent(`${q} when:${section.days}d`)
@@ -121,7 +126,7 @@ export async function pickNews(section, state, used) {
   }));
   let failed = 0;
   results.forEach((r, i) => {
-    if (r.status === 'fulfilled') for (const it of r.value) all.set(it.link, it);
+    if (r.status === 'fulfilled') for (const it of r.value) { all.set(it.link, it); fetchedAll.set(it.link, it); }
     else { failed++; console.error(`${section.title}: запрос «${section.queries[i]}» не удался (${r.reason && r.reason.message})`); }
   });
   if (failed === section.queries.length) throw new Error('все запросы не удались');
@@ -131,7 +136,7 @@ export async function pickNews(section, state, used) {
       && passesFilters(section, i)
       && !alreadySent(i.title, state.sent.map((x) => x.t)) && !alreadySent(i.title, [...used]))
     .sort((a, b) => b.date - a.date);
-  console.log(`${section.title}: найдено в Google News ${all.size}, подходит ${found.length}`);
+  console.log(`${section.title}: заголовков в выдаче ${all.size}, подходит ${found.length}`);
   // Для настройки фильтров: в пробном запуске показываем, из чего выбирали.
   if (DRY) for (const f of found.slice(0, 6)) console.log(`   - ${f.date.toISOString().slice(0, 10)} | ${f.source} | ${f.title}`);
 
@@ -195,6 +200,7 @@ async function fetchSummary(item) {
   if (FIXTURES) return '';
   try {
     const url = await resolveGoogleLink(item.link);
+    item.url = url;   // прямая ссылка на статью вместо редиректа Google News
     const html = (await tryFetch(url)).slice(0, 400000);
     const meta = extractMeta(html);
     // Страница-заглушка, главная или окно с cookie: заголовок не совпадает с нашей новостью.
@@ -212,10 +218,11 @@ async function fetchSummary(item) {
   }
 }
 
-function newsBlock(section, item) {
+export function newsBlock(section, item) {
   const when = ruLocal(item.date, { day: 'numeric', month: 'long' });
   const src = item.source ? `${esc(item.source)}, ${when}` : when;
-  const head = `<b>${section.title}.</b> «<a href="${esc(item.link)}">${esc(item.title)}</a>» (${src})`;
+  const href = item.url && /^https?:\/\//.test(item.url) ? item.url : item.link;
+  const head = `<b>${section.title}.</b> «<a href="${escAttr(href)}">${esc(item.title)}</a>» (${src})`;
   return item.summary ? `${head}\n${esc(item.summary)}` : head;
 }
 
@@ -246,6 +253,14 @@ async function weatherBlock(today) {
     + '&daily=temperature_2m_max,temperature_2m_min,temperature_2m_mean,snowfall_sum,precipitation_sum,wind_gusts_10m_max'
     + `&past_days=5&forecast_days=7&timezone=${encodeURIComponent(WEATHER_TZ)}`;
   const d = JSON.parse(await getText(url, 'weather.json')).daily;
+  let ctx = null;
+  try { ctx = await centerCtx(); } catch (e) { console.error(`Режим льда по приложению не определён (${e.message}), считаю по погоде`); }
+  return weatherText(d, today, ctx);
+}
+
+// Текст блока «Погода» из дневного прогноза Open-Meteo (5 прошлых дней и 7 вперёд). Без сети, проверяется тестами.
+// ctx: режим центра карты (fishCtx) или null, если его не удалось получить.
+export function weatherText(d, today, ctx) {
   const i0 = d.time.indexOf(today);
   if (i0 < 0) throw new Error('нет сегодняшней даты в прогнозе');
 
@@ -262,23 +277,19 @@ async function weatherBlock(today) {
 
   // Лёд и заморозки. Режим «зима» по тем же правилам, что в приложении:
   // средняя температура за 5 прошлых и 2 дня прогноза не выше минус 5.
-  const win = d.temperature_2m_mean.slice(i0 - 5, i0 + 2).filter((t) => t != null);
-  const winMean = win.reduce((a, b) => a + b, 0) / win.length;
-  let ctx = null;
-  try { ctx = await centerCtx(); } catch (e) { console.error(`Режим льда по приложению не определён (${e.message}), считаю по погоде`); }
+  const win = d.temperature_2m_mean.slice(Math.max(0, i0 - 5), i0 + 2).filter((t) => t != null);
+  const winMean = win.length ? win.reduce((a, b) => a + b, 0) / win.length : 10;
   const frozen = ctx ? ctx.autoIce : winMean <= -5;
   const winterCold = ctx ? ctx.avg <= -5 : winMean <= -5;
-  {
-    const future = d.time.map((date, i) => ({ date, min: d.temperature_2m_min[i] })).slice(i0);
-    const cold = future.find((x) => x.min <= -5);
-    const lowest = Math.min(...future.map((x) => x.min));
-    let tail;
-    if (cold) tail = `Похолодание: с ${ruDay(cold.date)} ночью до ${fmtT(Math.min(...future.filter((x) => x.date >= cold.date).map((x) => x.min)))}. Льда пока ждать не стоит.`;
-    else if (Math.round(lowest) <= -1) tail = `Ночные заморозки слабые (до ${fmtT(lowest)}), льда по погоде не ожидается.`;
-    else if (lowest <= 0.5) tail = 'Ночью около нуля, льда по погоде не ожидается.';
-    else tail = 'Заморозков на неделю не видно, льда по погоде не ожидается.';
-    parts.push(iceSentence({ frozen, winterCold, cat: ctx ? ctx.cat : 'unknown' }, tail));
-  }
+  const future = d.time.map((date, i) => ({ date, min: d.temperature_2m_min[i] })).slice(i0).filter((x) => x.min != null);
+  const cold = future.find((x) => x.min <= -5);
+  const lowest = Math.min(...future.map((x) => x.min));
+  let tail;
+  if (cold) tail = `Похолодание: с ${ruDay(cold.date)} ночью до ${fmtT(Math.min(...future.filter((x) => x.date >= cold.date).map((x) => x.min)))}. Льда пока ждать не стоит.`;
+  else if (Math.round(lowest) <= -1) tail = `Ночные заморозки слабые (до ${fmtT(lowest)}), льда по погоде не ожидается.`;
+  else if (lowest <= 0.5) tail = 'Ночью около нуля, льда по погоде не ожидается.';
+  else tail = 'Заморозков на неделю не видно, льда по погоде не ожидается.';
+  parts.push(iceSentence({ frozen, winterCold, cat: ctx ? ctx.cat : 'unknown' }, tail));
   return `<b>Погода.</b> ${parts.join(' ')}`;
 }
 
@@ -339,24 +350,25 @@ async function spotsBlock() {
   const season = winter ? 'winter' : 'summer';
   const inSeason = spots.filter((s) => { const q = s.season || 'summer'; return q === 'both' || q === season; });
   console.log(`Клёв: точек всего ${spots.length}, в сезоне «${winter ? 'зима' : 'лето'}» ${inSeason.length}`);
-  if (!inSeason.length) return null;
+  if (!inSeason.length) return { text: null, failed: 0 };   // точек на этот сезон нет: блок молча пропадает (решение владельца)
 
   const scored = [];
+  let failed = 0;
   for (const [n, sp] of inSeason.entries()) {
     try {
       const [w, h] = await Promise.all([wxFor(sp.lat, sp.lon), histFor(sp.lat, sp.lon)]);
       const ctx = fishCtx(w, h);          // режим каждой точки по её координатам, как в приложении
       const r = fishDay(w, 0, ctx);
       scored.push({ name: sp.name, ...r, ice: ctx.ice });
-    } catch (e) { console.error(`Клёв: точка №${n + 1} пропущена (${e.message})`); }
+    } catch (e) { failed++; console.error(`Клёв: точка №${n + 1} пропущена (${e.message})`); }
   }
-  if (!scored.length) return null;
+  if (!scored.length) return { text: null, failed };
   scored.sort((a, b) => b.score - a.score);
   const top = scored.slice(0, 3);
   if (DRY) for (const [i, t] of scored.entries()) console.log(`   - ${t.score} | ${MASK_SPOTS ? 'точка ' + (i + 1) : t.name}${t.warn ? ' | ' + t.warn : ''}`);
 
   if (DRY && MASK_SPOTS) console.log('В пробном запуске названия точек скрыты: логи публичные.');
-  return formatSpots(top, { winter, mask: DRY && MASK_SPOTS });
+  return { text: formatSpots(top, { winter, mask: DRY && MASK_SPOTS }), failed };
 }
 
 // Текст блока точек. Предупреждения (тонкий лёд, ветер, мороз) показываются для каждой точки:
@@ -486,7 +498,8 @@ async function main() {
 
   try {
     const sb = await spotsBlock();
-    if (sb) blocks.push(sb);
+    if (sb.text) blocks.push(sb.text);
+    if (sb.failed) problems.push(`блок «Топ точек»: точек без прогноза ${sb.failed}`);
   } catch (e) { console.error(`Клёв по точкам недоступен: ${e.message}`); problems.push('блок «Топ точек» не получен'); }
 
   const used = new Set();

@@ -8,9 +8,10 @@ export const norm = (s) => s.toLowerCase().replace(/[^a-z0-9а-я]+/g, ' ').trim
 // (проверено вживую 2026-11-11). Результаты нескольких запросов объединяются.
 export const SECTIONS = [
   { title: 'Альберта', kind: 'ab', fixture: 'alberta.xml', days: 21,
-    queries: ['Alberta fishing', 'Alberta anglers', 'Calgary fishing', 'Alberta ice fishing'] },
+    queries: ['Alberta fishing', 'Alberta anglers', 'Calgary fishing', 'Alberta ice fishing', 'Alberta walleye', 'Alberta trout'] },
   { title: 'Канада', kind: 'ca', fixture: 'canada.xml', days: 14,
-    queries: ['Canada fishing anglers', 'recreational fishing Canada', 'ice fishing Canada', 'Fisheries and Oceans Canada anglers'] },
+    queries: ['Canada fishing anglers', 'recreational fishing Canada', 'ice fishing Canada', 'Fisheries and Oceans Canada anglers',
+      'B.C. fishing', 'Ontario fishing', 'Saskatchewan fishing'] },
 ];
 
 // ---------- привязка к региону ----------
