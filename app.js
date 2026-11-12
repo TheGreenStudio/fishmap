@@ -590,7 +590,10 @@
     if (cached && Date.now() - cached.t < 15 * 60 * 1000) return { data: cached.data, t: cached.t, stale: false };
     const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
       '&current=temperature_2m,apparent_temperature,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_gusts_10m,wind_direction_10m' +
-      '&hourly=pressure_msl,temperature_2m,wind_speed_10m,precipitation&past_hours=24' +
+      '&hourly=pressure_msl&past_hours=24' +
+      // для ночей кэмпинга: почасовые температура, ветер, осадки отдельным параметром (первая часть запроса совпадает с ботом сводки);
+      // forecast_hours=96, иначе с past_hours почасовой прогноз приходит на 16 дней и кэш на телефоне тяжелеет
+      '&hourly=temperature_2m,wind_speed_10m,precipitation&forecast_hours=96' +
       '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset' +
       '&forecast_days=4&timezone=auto&wind_speed_unit=kmh';
     try {
@@ -1278,7 +1281,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 32, date: '2026-11-12' };
+  const APP = { v: 33, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
