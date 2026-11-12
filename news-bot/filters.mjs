@@ -17,25 +17,54 @@ export const SECTIONS = [
 // Google News находит и чужие местные газеты: Victoria (Австралия), Ottawa County (США),
 // Vancouver, Wash., Airdrie (Шотландия). Поэтому голые названия городов, которые есть и за пределами Канады,
 // региона не доказывают: нужен канадский источник или однозначное слово в заголовке.
+// Канадский источник сам по себе не доказывает, что новость про Канаду: канадские сайты перепечатывают
+// новости AP и Reuters (12.11.2026 так прошла новость про ловлю в Montauk, Нью-Йорк). Поэтому место
+// должно быть в заголовке.
 
-// Источники, про которые известно, что они канадские.
-const CA_SOURCE = /\.ca\b|\bcbc\b|\bctv\b|global ?news|citynews|narcity|daily hive|castanet|national post|canadian press|calgary (herald|sun)|edmonton (journal|sun)|toronto (star|sun)|globe and mail|free press|vancouver sun|times colonist|\bchek\b|pr newswire canada|canada newswire/i;
-// Названия, однозначно указывающие на Альберту.
-const AB_SURE = /alberta|calgary|edmonton|red deer|lethbridge|medicine hat|bow river|elbow river|stettler|grande prairie|peace river|canmore|okotoks|mcmurray|slave lake|athabasca|cold lake|bonnyville|wetaskiwin|camrose|drumheller|lloydminster|high river|rocky mountain house|sylvan lake|pigeon lake|lac la biche|buffalo lake|chestermere|glenmore/i;
+// Местные издания и ведомства Альберты: свои новости, перепечаток зарубежных почти нет.
+const AB_LOCAL = [
+  'rdnewsnow', 'cochrane eagle', 'cochrane ?today', 'airdrie (city view|today)', 'discover airdrie', 'brooks bulletin',
+  'rocky mountain outlook', 'rmo ?today', 'fitzhugh', 'crag (&|and) canyon', 'lethbridge herald', 'medicine hat news',
+  'red deer advocate', 'ponoka news', 'lacombe express', 'stettler independent', 'sherwood park news', 'st\\.? albert gazette',
+  'lakeland ?today', 'town ?and ?country ?today', 'mountain ?view ?today', 'okotoks ?today', 'western wheel', 'high river times',
+  'strathmore times', 'taber times', 'cold lake sun', 'everythinggp', 'my ?grande ?prairie ?now', 'my ?mcmurray', 'todayville',
+  'chat news today', 'city of (calgary|edmonton|red deer|lethbridge|airdrie|medicine hat)', 'alberta\\.ca', 'government of alberta',
+];
+const AB_LOCAL_SOURCE = new RegExp(AB_LOCAL.join('|'), 'i');
+// Источники, про которые известно, что они канадские (общенациональные и местные).
+const CA_SOURCE = new RegExp([
+  '\\.ca\\b', '\\bcbc\\b', '\\bctv\\b', 'global ?news', 'citynews', 'narcity', 'daily hive', 'castanet', 'national post',
+  'canadian ?press', 'calgary (herald|sun)', 'edmonton (journal|sun)', 'toronto (star|sun)', 'globe and mail', 'free press',
+  'vancouver sun', 'times colonist', '\\bchek\\b', 'pr newswire canada', 'canada newswire', 'saltwire', 'cfjc', 'ckpg',
+  'western producer', ...AB_LOCAL,
+].join('|'), 'i');
+// Названия, однозначно указывающие на Альберту (озёра, реки, города и округа).
+const AB_SURE = /alberta|calgary|edmonton|red deer|lethbridge|medicine hat|bow river|elbow river|stettler|grande prairie|peace river|canmore|okotoks|mcmurray|slave lake|athabasca|cold lake|bonnyville|wetaskiwin|camrose|drumheller|lloydminster|high river|rocky mountain house|sylvan lake|pigeon lake|lac la biche|buffalo lake|chestermere|glenmore|ponoka|strathcona|wheatland|lacombe|lac ste\.? anne|wabamun|gull lake|pine lake|ghost lake|chain lakes|kananaskis|waterton|abraham lake|minnewanka|spray lakes|oldman river|red deer river|north saskatchewan|crowsnest|highwood|innisfail|sundre|strathmore|pincher creek|claresholm|stony plain|spruce grove|st\.? albert|fort saskatchewan|morinville|wainwright|whitecourt|edson|high prairie|wabasca|fort chipewyan/i;
 // Названия, которые бывают и вне Альберты: засчитываем только с канадским источником.
 const AB_AMBIG = /airdrie|cochrane|brooks|jasper|banff/i;
 // Однозначно канадские слова в заголовке (без Victoria, Ottawa, Vancouver, Toronto: они есть и в других странах).
-const CA_TITLE = /canad|b\.c\.|\bbc\b|ontario|manitoba|saskatchewan|quebec|nova scotia|new brunswick|newfoundland|yukon|nunavut|northwest territories|\bdfo\b|fisheries and oceans|alberta|prince edward island|kelowna|kamloops|saskatoon|winnipeg|thunder bay|sudbury|nanaimo|prince george|whitehorse|yellowknife|okanagan/i;
-// Признаки чужой страны.
-const FOREIGN = /\b(wash|wis|mich|minn|tex|fla|calif|penn)\.|\bcounty\b|australia|queensland|gippsland|new zealand|scotland|england|ireland|\bUK\b/i;
+const CA_TITLE = /canad|b\.c\.|\bbc\b|british columbia|vancouver island|fraser river|haida gwaii|ontario|\bont\.|lake simcoe|georgian bay|lake of the woods|manitoba|saskatchewan|\bsask\.|quebec|\bque\.|nova scotia|n\.s\.|new brunswick|n\.b\.|newfoundland|\bnfld\.|labrador|yukon|nunavut|northwest territories|n\.w\.t\.|\bdfo\b|fisheries and oceans|\balta\.|prince edward island|p\.e\.i\.|kelowna|kamloops|saskatoon|winnipeg|thunder bay|sudbury|nanaimo|prince george|whitehorse|yellowknife|okanagan/i;
+// Канадские города с тёзками в других странах: засчитываем только с канадским источником.
+const CA_AMBIG = /toronto|ottawa|vancouver|victoria|montreal|halifax|regina|hamilton|kingston|windsor|london/i;
+// Признаки чужой страны. Слово County само по себе не признак США: в Альберте много County (Ponoka, Strathcona).
+const FOREIGN = /\b(wash|wis|mich|minn|tex|fla|calif|penn|mont|ore|n\.y)\.|australia|queensland|gippsland|new zealand|scotland|england|ireland|\bUK\b/i;
+const COUNTY = /\bcounty\b/i;
+// Сайты, которые находятся по слову «Canadian», но не про нашу рыбалку (развлечения США, обзоры рынков, некрологи).
+export const SOURCE_BLOCK = /whiskey riff|outkick|sports illustrated|\bfox \d|future market|market (research|insights)|dignity memorial|legacy\.com/i;
 
 export function inRegion(section, title, source = '') {
   const caSource = CA_SOURCE.test(source);
   if (FOREIGN.test(title) && !caSource) return false;
+  const abTitle = AB_SURE.test(title);
+  // County засчитываем как США, только если в заголовке нет канадских мест и источник не канадский
+  if (COUNTY.test(title) && !caSource && !abTitle && !CA_TITLE.test(title)) return false;
   if (section.kind === 'ab') {
-    return AB_SURE.test(`${title} ${source}`) || (AB_AMBIG.test(title) && caSource);
+    // Крупные газеты (Calgary Herald и др.) перепечатывают чужие новости, поэтому без места в заголовке
+    // засчитываем только местные издания Альберты.
+    return abTitle || AB_LOCAL_SOURCE.test(source) || (AB_AMBIG.test(title) && caSource);
   }
-  return CA_TITLE.test(title) || caSource;
+  if (FOREIGN.test(title)) return false;   // перепечатка зарубежной новости канадским сайтом
+  return CA_TITLE.test(title) || abTitle || (CA_AMBIG.test(title) && caSource);
 }
 
 // Нужны именно новости про любительскую рыбалку: промысел и прочее отсекаем.
@@ -45,23 +74,26 @@ export const MUST = /fish|angl|trout|walleye|pike|carp|sturgeon|whitefish|perch|
 export const STRONG = /angler|angling|ice fishing|fishing (ban|closure|rules?|regulations?|licen[cs]e|season|derby|tournament|report|limits?)|\bdfo\b|fisheries and oceans|stocking|derby|big jack|invasive|carp|walleye|trout|\bpike\b|sturgeon|whitefish|burbot|grayling|steelhead|conservation officer|fined|fines\b/i;
 // Путевые заметки и подборки не нужны.
 export const TRAVEL = /village|lighthouse|best places|top \d+|things to do|travel|vacation|resort|getaway|charming|bucket list|destinations?|itinerary|road trip|hidden gem|must[- ]visit|hotels?\b/i;
-export const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b|\bdead\b|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|share price|shares (?:rise|rose|fall|fell|jump|drop|surge)|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|first nation|pipeline|hydro|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
+export const BLOCK = /commercial|aquaculture|seafood|lobster|crab|shrimp|prawn|clam|mussel|sea cucumber|urchin|geoduck|abalone|sponge reef|scallop|oyster|whale|trawler|vessel|tariff|fishing sector|fishing industry|obituar|\bdie[sd]?\b|\bdead\b|death|fatal|killed|drown|body found|missing|shooting|stock market|earnings|share price|shares (?:rise|rose|fall|fell|jump|drop|surge)|\bcod\b|quota|fish farm|salmon farm|herring|tuna|fossil|first nation|pipeline|hydro|britannica|golf|\bbears?\b|fish and wildlife club|stolen|rescued|recipe|restaurant/i;
 
 // Подходит ли заголовок для раздела целиком.
 export function passesFilters(section, item) {
   const t = item.title;
-  return MUST.test(t) && STRONG.test(t) && !BLOCK.test(t) && !TRAVEL.test(t) && inRegion(section, t, item.source || '');
+  return MUST.test(t) && STRONG.test(t) && !BLOCK.test(t) && !TRAVEL.test(t) && !SOURCE_BLOCK.test(item.source || '')
+    && inRegion(section, t, item.source || '');
 }
 
 // ---------- «одна и та же история» ----------
 // Одну историю пересказывают несколько изданий. Заголовки считаем «про одно», если у них много общих
 // значимых слов. Слова вроде «Alberta», «fishing», «anglers» есть почти в каждом заголовке и ничего не доказывают,
-// поэтому в расчёт не берутся. Слова сравниваем по первым пяти буквам, чтобы «closes» и «closed» совпадали.
+// поэтому в расчёт не берутся. У слов отбрасываем окончания (-ing, -ed, -es, -s) и сравниваем первые пять букв,
+// чтобы «closes» и «closed», «fined» и «fines» совпадали.
 const STOP = new Set(['alberta', 'albertas', 'canada', 'canadian', 'calgary', 'edmonton', 'fishing', 'fish', 'angler', 'anglers', 'angling',
   'lake', 'lakes', 'river', 'news', 'says', 'said', 'after', 'will', 'from', 'with', 'this', 'that', 'what', 'when', 'where', 'have',
   'been', 'were', 'they', 'their', 'more', 'into', 'over', 'near', 'local', 'province', 'provincial', 'report', 'reports', 'ice',
   'season', 'year', 'years', 'week', 'today', 'amid', 'about', 'than', 'also', 'just', 'back', 'first', 'last']);
-export const stems = (s) => new Set(norm(s).split(' ').filter((w) => w.length >= 4 && !STOP.has(w)).map((w) => w.slice(0, 5)));
+const stem = (w) => (w.length > 5 ? w.replace(/(ing|ed|es|s)$/, '') : w.replace(/(ed|es|s)$/, '')).slice(0, 5);
+export const stems = (s) => new Set(norm(s).split(' ').filter((w) => w.length >= 4 && !STOP.has(w)).map(stem));
 export function sameStory(a, b) {
   const A = stems(a), B = stems(b);
   let shared = 0;

@@ -25,7 +25,8 @@ test('Альберта: двусмысленный город + канадски
 
 test('Канада: канадские слова и источники', () => {
   assert.ok(passesFilters(CA, it('DFO reviews recreational fishing rules for trout')));
-  assert.ok(passesFilters(CA, it('Ice fishing derby draws anglers', 'CTV News')));
+  // канадский источник без места в заголовке больше не считается новостью про Канаду
+  assert.ok(!passesFilters(CA, it('Ice fishing derby draws anglers', 'CTV News')));
   assert.ok(!passesFilters(CA, it('Ottawa County anglers prep for walleye opener', 'Holland Sentinel')));
   assert.ok(!passesFilters(CA, it('Victoria anglers enjoy fishing season', 'Geelong Advertiser')));
 });
@@ -87,4 +88,43 @@ test('pickWithSummary: берёт свежий с описанием, но не 
   assert.equal(pickWithSummary([a, b, c], 5), b);
   assert.equal(pickWithSummary([a, c], 5), a);
   assert.equal(pickWithSummary([], 5), null);
+});
+
+// Живая выдача Google News 12.11.2026
+test('Канада: перепечатка зарубежной новости канадским сайтом не проходит', () => {
+  assert.ok(!passesFilters(CA, it('Generations of anglers have made the pilgrimage to Montauk to catch striped bass', 'thecanadianpressnews.ca')));
+  assert.ok(!passesFilters(AB, it('Generations of anglers have made the pilgrimage to Montauk to catch striped bass', 'Calgary Herald')));
+});
+
+test('Канада: морской промысел и развлекательные сайты США не проходят', () => {
+  assert.ok(!passesFilters(CA, it('2 fined $7.4K for illegal prawn fishing in closed sponge reef area in B.C.', 'CHEK News')));
+  assert.ok(!passesFilters(CA, it('$7,400 in fines for 2 anglers caught fishing in B.C. glass sponge reef, DFO says', 'CTV News')));
+  assert.ok(!passesFilters(CA, it('Canadian Anglers Absolutely Shocked To Reel In A Full Buck Skeleton Through The Ice', 'Whiskey Riff')));
+});
+
+test('Канада: настоящие канадские новости проходят', () => {
+  assert.ok(passesFilters(CA, it('Ontario Angler Catches 57-Inch Muskie on His First Try', 'OutdoorHub')));
+  assert.ok(passesFilters(CA, it('Tourist catches massive sturgeon in B.C.’s Fraser River', 'CTV News')));
+  assert.ok(passesFilters(CA, it('Toronto anglers report big walleye season', 'CBC')));
+  assert.ok(!passesFilters(CA, it('Toronto anglers report big walleye season', 'Some US Paper')));
+  assert.ok(passesFilters(CA, it('Calgary anglers flock to Glenmore for ice fishing', 'CTV News')));
+});
+
+test('Альберта: округа County и местные издания проходят', () => {
+  assert.ok(passesFilters(AB, it('Ponoka County ice fishing derby returns to Gull Lake', 'Ponoka News')));
+  assert.ok(passesFilters(AB, it('Strathcona County stocks trout in local ponds', 'Sherwood Park News')));
+  assert.ok(passesFilters(AB, it('Brooks walleye derby draws hundreds', 'Brooks Bulletin')));
+  assert.ok(passesFilters(AB, it('Banff closes lakes to fishing to protect bull trout', 'Rocky Mountain Outlook')));
+  assert.ok(passesFilters(AB, it('An Update on Prussian Carp in Evanston', 'The City of Calgary')));
+  assert.ok(passesFilters(AB, it('2027 Big Jack Classic postponed', 'The Stettler Independent')));
+});
+
+test('County без канадских признаков по-прежнему считается США', () => {
+  assert.ok(!passesFilters(AB, it('Lake County walleye anglers get new limits', 'News-Herald')));
+  assert.ok(!passesFilters(CA, it('Lake County walleye anglers get new limits', 'News-Herald')));
+});
+
+test('sameStory: пересказ CTV той же истории про штраф распознаётся', () => {
+  assert.ok(sameStory(norm('2 fined $7.4K for illegal prawn fishing in closed sponge reef area in B.C.'),
+    '$7,400 in fines for 2 anglers caught fishing in B.C. glass sponge reef, DFO says'));
 });
