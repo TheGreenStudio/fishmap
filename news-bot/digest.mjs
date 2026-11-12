@@ -227,11 +227,14 @@ const fmtT = (t) => {
 };
 
 // Фраза про лёд. frozen: приложение считает, что лёд мог встать (мороз или недавняя череда морозов);
-// winterCold: средняя температура держится не выше минус 5. Должна совпадать с режимом «зима» в блоке точек.
-export function iceSentence({ frozen, winterCold }, tail) {
+// winterCold: средняя температура держится не выше минус 5; cat: оценка льда по накопленному морозу,
+// та же, что в блоке точек (none, thin, check, ok, unknown). Фраза не должна спорить с предупреждениями точек.
+export function iceSentence({ frozen, winterCold, cat = 'unknown' }, tail) {
+  if (!frozen && !winterCold) return tail;
+  if (cat === 'none') return 'Похолодало, но лёд, скорее всего, ещё не встал: на лёд не выходить.';
+  if (cat === 'thin') return 'Лёд, скорее всего, ещё тонкий: на лёд не выходить.';
   if (winterCold) return 'Установилась зимняя погода: лёд мог встать, толщину проверяйте сами, по погоде её не определить.';
-  if (frozen) return 'После морозов оттепель: лёд мог остаться, но он ненадёжен, толщину проверяйте сами.';
-  return tail;
+  return 'После морозов оттепель: лёд мог остаться, но он ненадёжен, толщину проверяйте сами.';
 }
 
 // Режим центра карты (как «Авто» в приложении). Данные кэшируются и используются и в погоде, и в блоке точек.
@@ -274,7 +277,7 @@ async function weatherBlock(today) {
     else if (Math.round(lowest) <= -1) tail = `Ночные заморозки слабые (до ${fmtT(lowest)}), льда по погоде не ожидается.`;
     else if (lowest <= 0.5) tail = 'Ночью около нуля, льда по погоде не ожидается.';
     else tail = 'Заморозков на неделю не видно, льда по погоде не ожидается.';
-    parts.push(iceSentence({ frozen, winterCold }, tail));
+    parts.push(iceSentence({ frozen, winterCold, cat: ctx ? ctx.cat : 'unknown' }, tail));
   }
   return `<b>Погода.</b> ${parts.join(' ')}`;
 }
@@ -350,11 +353,23 @@ async function spotsBlock() {
   const top = scored.slice(0, 3);
   if (DRY) for (const [i, t] of scored.entries()) console.log(`   - ${t.score} | ${MASK_SPOTS ? 'точка ' + (i + 1) : t.name}${t.warn ? ' | ' + t.warn : ''}`);
 
-  const lines = top.map((t, i) => `${i + 1}. ${DRY && MASK_SPOTS ? 'точка ' + (i + 1) : esc(t.name)}: ${t.score} из 100, ${t.label}`);
   if (DRY && MASK_SPOTS) console.log('В пробном запуске названия точек скрыты: логи публичные.');
+  return formatSpots(top, { winter, mask: DRY && MASK_SPOTS });
+}
+
+// Текст блока точек. Предупреждения (тонкий лёд, ветер, мороз) показываются для каждой точки:
+// если у всех точек одно и то же предупреждение, оно пишется один раз под списком, иначе у каждой своей строки.
+export function formatSpots(top, { winter, mask = false }) {
+  const warns = top.map((t) => t.warn || '');
+  const common = warns[0] && warns.every((w) => w === warns[0]);
+  const lines = top.map((t, i) => {
+    let line = `${i + 1}. ${mask ? 'точка ' + (i + 1) : esc(t.name)}: ${t.score} из 100, ${t.label}`;
+    if (t.warn && !common) line += `. ${esc(t.warn)}.`;
+    return line;
+  });
   const head = lines.length >= 3 ? 'Топ 3 точки' : lines.length === 2 ? 'Топ 2 точки' : 'Лучшая точка';
   let out = `<b>${head}</b> (${winter ? 'зима, подлёдная рыбалка' : 'лето, открытая вода'}):\n${lines.join('\n')}`;
-  if (top[0].warn) out += `\n${esc(top[0].warn)}.`;
+  if (common) out += `\n${esc(warns[0])}.`;
   if (winter) out += '\nЛёд оценивается только по погоде, толщину проверяйте сами.';
   return out;
 }
