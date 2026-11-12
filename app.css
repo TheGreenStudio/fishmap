@@ -381,3 +381,15 @@ body.is-offline #filterMenu{top:calc(192px + var(--safe-t));max-height:calc(100d
 .lvreset{color:var(--primary);font-weight:600;text-decoration:underline;font-size:inherit}
 .sres.t-camp .si{color:var(--camp)}
 .sres.t-poi .si{color:var(--poi)}
+/* главная строка кэмпинга и интересного места (сборка 32) */
+.mrow.t-camp,.mhead.t-camp,.fs.t-camp{--fc:var(--camp)}
+.mrow.t-poi,.mhead.t-poi,.fs.t-poi{--fc:var(--poi)}
+.fs.t-camp,.fs.t-poi{gap:3px;color:var(--text)}
+.mcirc{flex:none;width:40px;height:40px;border-radius:50%;background:var(--fc);color:var(--surface);display:flex;align-items:center;justify-content:center}
+.mhead .mcirc{width:46px;height:46px}
+.nlist{display:flex;flex-direction:column;margin-bottom:12px}
+.nrow{display:grid;grid-template-columns:auto 1fr;column-gap:12px;row-gap:1px;padding:9px 0;border-bottom:1px solid var(--border)}
+.nrow:last-child{border-bottom:0}
+.nrow .d{grid-row:span 2;align-self:center;min-width:64px;font-size:13px;font-weight:600;color:var(--muted)}
+.nrow .v{font-size:15px;font-weight:700}
+.nrow .s{font-size:12px;color:var(--muted)}

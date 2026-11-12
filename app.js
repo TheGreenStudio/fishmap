@@ -75,6 +75,8 @@
     tent: '<path d="M3 19.5L12 5l9 14.5H3z"/><path d="M9.6 19.5L12 14.5l2.4 5"/>',
     bino: '<circle cx="7" cy="15.5" r="3.5"/><circle cx="17" cy="15.5" r="3.5"/><path d="M10.5 15h3M4.5 13L7 6.5h2.5V12M19.5 13L17 6.5h-2.5V12"/>',
     filter: '<path d="M4 5h16l-6.2 7.6V19l-3.6-1.8v-4.6L4 5z"/>',
+    moon: '<path d="M19.5 14.6A8 8 0 019.4 4.5a8 8 0 1010.1 10.1z"/>',
+    sunset: '<path d="M3 18h18M6.5 14.5a5.5 5.5 0 0111 0M12 3.5v4M9.5 6l2.5 2.5L14.5 6M4.6 9.6l1.5 1.1M19.4 9.6l-1.5 1.1M8 21.5h8"/>',
     kid: '<circle cx="12" cy="13" r="7"/><path d="M12 6c-1.9-1.6-.3-3.8 1.6-2.7"/><path d="M9.5 12.4v.01M14.5 12.4v.01"/><path d="M9.6 15.6c1.3 1.1 3.5 1.1 4.8 0"/>',
     fish: '<path d="M2.5 12c2.6-4 6.2-5.3 10-4 1.6.6 3 1.6 4 3l4.5-3.2v8.4L16.5 13c-1 1.4-2.4 2.4-4 3-3.8 1.3-7.4 0-10-4z"/><circle cx="8" cy="11" r="0.6"/>'
   };
@@ -588,7 +590,7 @@
     if (cached && Date.now() - cached.t < 15 * 60 * 1000) return { data: cached.data, t: cached.t, stale: false };
     const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
       '&current=temperature_2m,apparent_temperature,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_gusts_10m,wind_direction_10m' +
-      '&hourly=pressure_msl&past_hours=24' +
+      '&hourly=pressure_msl,temperature_2m,wind_speed_10m,precipitation&past_hours=24' +
       '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset' +
       '&forecast_days=4&timezone=auto&wind_speed_unit=kmh';
     try {
@@ -630,6 +632,122 @@
       '<circle cx="' + Math.min(last[0], w - 4) + '" cy="' + last[1] + '" r="4.5" fill="var(--accent)"/></svg>';
   }
 
+  /* ---------- кэмпинг: ночь; интересное место: световой день ---------- */
+  const nowAt = (d) => new Date(Date.now() + (d.utc_offset_seconds || 0) * 1000).toISOString().slice(0, 16);
+  const hmS = (t) => String(+t.slice(11, 13)) + ':' + t.slice(14, 16);
+  const minsBetween = (a, b) => rnd((Date.parse(b.slice(0, 16) + ':00Z') - Date.parse(a.slice(0, 16) + ':00Z')) / 60000);
+  const durTxt = (m) => (!isFinite(m) || m < 0 ? '' : (m >= 60 ? Math.floor(m / 60) + ' ч ' : '') + (m % 60) + ' мин');
+  const wdShort = (day) => new Date(day + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' });
+  const nightWord = (t) => (t <= -10 ? 'мороз' : t < 0 ? 'ниже нуля' : '');
+  const mmTxt = (x) => x.toFixed(1).replace('.', ',') + ' мм';
+  // почасовые данные между a и b: самая низкая температура, самый сильный ветер, сумма осадков
+  function hoursAgg(d, a, b) {
+    const h = d.hourly || {}, out = { min: null, wind: 0, pr: 0 };
+    if (!h.time || !h.temperature_2m) return out;
+    h.time.forEach((t, k) => {
+      if (t < a || t > b) return;
+      const v = h.temperature_2m[k]; if (v != null) out.min = out.min == null ? v : Math.min(out.min, v);
+      out.wind = Math.max(out.wind, (h.wind_speed_10m || [])[k] || 0);
+      out.pr += (h.precipitation || [])[k] || 0;
+    });
+    return out;
+  }
+  // ночь i: от заката дня i до рассвета дня i+1; без почасовых данных (старый кэш) берём дневной минимум следующего дня
+  function nightsOf(d) {
+    const dy = d.daily, out = [];
+    if (!dy || !dy.sunset || !dy.sunrise) return out;
+    for (let i = 0; i + 1 < dy.time.length; i++) {
+      const a = dy.sunset[i], b = dy.sunrise[i + 1]; if (!a || !b) continue;
+      const g = hoursAgg(d, a, b);
+      let min = g.min, approx = false;
+      if (min == null) { min = dy.temperature_2m_min ? dy.temperature_2m_min[i + 1] : null; approx = true; }
+      if (min == null) continue;
+      out.push({ i: i, from: dy.time[i], to: dy.time[i + 1], min: min, wind: g.wind, pr: g.pr, approx: approx });
+    }
+    return out;
+  }
+  // ночь для главной строки: до рассвета — «Эта ночь» до утра; днём — ближайшая «Ночь на сб»; после заката — «Эта ночь»
+  function nightNow(d) {
+    const dy = d.daily; if (!dy || !dy.sunrise || !dy.sunset) return null;
+    const now = nowAt(d), d0 = dy.time.indexOf(now.slice(0, 10)); if (d0 < 0) return null;
+    if (dy.sunrise[d0] && now < dy.sunrise[d0]) {
+      const g = hoursAgg(d, now.slice(0, 13) + ':00', dy.sunrise[d0]);
+      if (g.min != null) return { label: 'Эта ночь', min: g.min, wind: g.wind, pr: g.pr, d0: d0 };
+    }
+    const n = nightsOf(d).find((x) => x.i === d0); if (!n) return null;
+    return Object.assign({ label: dy.sunset[d0] && now >= dy.sunset[d0] ? 'Эта ночь' : 'Ночь на ' + wdShort(dy.time[d0 + 1]), d0: d0 }, n);
+  }
+  function dayLight(d) {
+    const dy = d.daily; if (!dy || !dy.sunrise || !dy.sunset) return null;
+    const now = nowAt(d), d0 = dy.time.indexOf(now.slice(0, 10)); if (d0 < 0 || !dy.sunset[d0] || !dy.sunrise[d0]) return null;
+    const sr = dy.sunrise[d0], ss = dy.sunset[d0];
+    if (now < sr) return { state: 'before', sr: sr, ss: ss, d0: d0 };
+    if (now < ss) return { state: 'day', sr: sr, ss: ss, d0: d0, left: minsBetween(now, ss) };
+    if (!dy.sunset[d0 + 1] || !dy.sunrise[d0 + 1]) return { state: 'dark', sr: sr, ss: ss, d0: d0 };
+    return { state: 'after', sr: dy.sunrise[d0 + 1], ss: dy.sunset[d0 + 1], d0: d0, todaySs: ss };
+  }
+  // главная строка карточки для кэмпинга и интересного места (у рыбалки — клёв)
+  function mainRowHtml(ty, res) {
+    const d = res.data, old = res.stale && Date.now() - res.t > 12 * 3600e3, oldTxt = 'по погоде от ' + whenText(res.t) + ', данные устарели';
+    const chev = ic('chev_r', 20, 'currentColor', 2);
+    if (ty === 'camp') {
+      const n = nightNow(d); if (!n) return '';
+      const w = nightWord(n.min), sub = [];
+      if (n.wind) sub.push('ветер до ' + rnd(n.wind) + ' км/ч');
+      if (n.pr >= 0.2) sub.push('осадки ' + mmTxt(n.pr));
+      sub.push('ночи на 3 дня');
+      const head = n.label + ': ' + fmtT(n.min) + (w ? ', ' + w : '');
+      return '<button class="fishrow mrow t-camp" id="bMain" type="button" aria-label="' + esc(head) + '. Подробнее">' +
+        '<span class="mcirc">' + ic('moon', 20, 'currentColor', 2) + '</span><span class="ftxt"><b>' + esc(head) + '</b><span>' + esc(old ? oldTxt : sub.join(' · ').replace(/^в/, 'В')) + '</span></span>' + chev + '</button>';
+    }
+    if (ty === 'poi') {
+      const L = dayLight(d); if (!L) return '';
+      let head, sub;
+      if (L.state === 'before') { head = 'Светло с ' + hmS(L.sr) + ' до ' + hmS(L.ss); sub = 'Сегодня · рассветы и закаты на 3 дня'; }
+      else if (L.state === 'day') { head = 'Светло до ' + hmS(L.ss); sub = 'Осталось ' + durTxt(L.left) + ' · закаты на 3 дня'; }
+      else if (L.state === 'after') { head = 'Завтра светло с ' + hmS(L.sr) + ' до ' + hmS(L.ss); sub = 'Сегодня стемнело в ' + hmS(L.todaySs); }
+      else { head = 'Стемнело в ' + hmS(L.ss); sub = 'Рассветы и закаты на 3 дня'; }
+      return '<button class="fishrow mrow t-poi" id="bMain" type="button" aria-label="' + esc(head) + '. Подробнее">' +
+        '<span class="mcirc">' + ic('sunset', 20, 'currentColor', 2) + '</span><span class="ftxt"><b>' + esc(head) + '</b><span>' + esc(old ? oldTxt : sub) + '</span></span>' + chev + '</button>';
+    }
+    return '';
+  }
+  function staleNote(res) { return res.stale ? '<p class="fwarn">' + ic('cloud_off', 18, 'currentColor', 1.8) + '<span>Нет сети, прогноз от ' + whenText(res.t) + '</span></p>' : ''; }
+  function typeTag(ty, d, cls) {
+    if (ty === 'camp') { const n = nightNow(d); return n ? '<span class="fs t-camp' + (cls || '') + '" aria-label="Ночью ' + fmtT(n.min) + '">' + ic('moon', 12, 'currentColor', 2.4) + 'Ночью ' + fmtT(n.min) + '</span>' : ''; }
+    if (ty === 'poi') { const L = dayLight(d); return L ? '<span class="fs t-poi' + (cls || '') + '">' + (L.state === 'after' ? 'Закат завтра ' : 'Закат ') + hmS(L.ss) + '</span>' : ''; }
+    return '';
+  }
+  function showNights() {
+    const res = S.wxRes; if (!res) return;
+    const d = res.data, n0 = nightNow(d); if (!n0) return;
+    const ns = nightsOf(d).filter((x) => x.i >= n0.d0).slice(0, 3);
+    const rows = ns.map((x) => {
+      const w = nightWord(x.min), sub = [];
+      if (x.wind) sub.push('ветер до ' + rnd(x.wind) + ' км/ч');
+      if (x.pr >= 0.2) sub.push('осадки ' + mmTxt(x.pr));
+      return '<div class="nrow"><span class="d">' + esc(wdShort(x.from) + ' → ' + wdShort(x.to)) + '</span><span class="v">' + fmtT(x.min) + (w ? ', ' + w : '') + '</span><span class="s">' + esc(sub.join(' · ')) + '</span></div>';
+    }).join('');
+    const w0 = nightWord(n0.min);
+    openModal('<div class="fhead mhead t-camp"><span class="mcirc">' + ic('moon', 22, 'currentColor', 2) + '</span><div><h3>' + esc(n0.label + ': ' + fmtT(n0.min) + (w0 ? ', ' + w0 : '')) + '</h3><p class="sub">Самая низкая температура от заката до рассвета</p></div></div>' + staleNote(res) +
+      (rows ? '<h4 class="fh4">Ночи</h4><div class="nlist">' + rows + '</div>' : '') +
+      '<p class="fnote">Прогноз Open-Meteo для этой точки' + (ns.some((x) => x.approx) ? '; почасовых данных нет, взят дневной минимум' : '') + '. В низинах и у воды ночью бывает холоднее на несколько градусов.</p>' +
+      '<div class="row"><button class="btn btn-primary" id="fOk" type="button">Понятно</button></div>');
+    $('#fOk').onclick = closeModal;
+  }
+  function showDaylight() {
+    const res = S.wxRes; if (!res) return;
+    const d = res.data, dy = d.daily, L = dayLight(d); if (!L) return;
+    const today = nowAt(d).slice(0, 10);
+    const rows = dy.time.map((t, i) => i).filter((i) => i >= L.d0 && dy.sunrise[i] && dy.sunset[i]).slice(0, 4).map((i) => '<div class="nrow"><span class="d">' + esc(dy.time[i] === today ? 'Сегодня' : wdShort(dy.time[i])) + '</span><span class="v">' + hmS(dy.sunrise[i]) + '–' + hmS(dy.sunset[i]) + '</span><span class="s">' + (isFinite(minsBetween(dy.sunrise[i], dy.sunset[i])) ? durTxt(minsBetween(dy.sunrise[i], dy.sunset[i])) + ' светлого времени' : '') + '</span></div>').join('');
+    const head = L.state === 'day' ? 'Светло до ' + hmS(L.ss) : L.state === 'before' ? 'Светло с ' + hmS(L.sr) + ' до ' + hmS(L.ss) : L.state === 'after' ? 'Завтра светло с ' + hmS(L.sr) : 'Стемнело в ' + hmS(L.ss);
+    openModal('<div class="fhead mhead t-poi"><span class="mcirc">' + ic('sunset', 22, 'currentColor', 2) + '</span><div><h3>' + esc(head) + '</h3><p class="sub">' + (L.state === 'day' ? 'Осталось ' + durTxt(L.left) : 'Рассветы и закаты') + '</p></div></div>' + staleNote(res) +
+      '<div class="nlist">' + rows + '</div>' +
+      '<p class="fnote">Время по часовому поясу места. В горах и каньонах солнце уходит за склоны раньше заката.</p>' +
+      '<div class="row"><button class="btn btn-primary" id="fOk" type="button">Понятно</button></div>');
+    $('#fOk').onclick = closeModal;
+  }
+
   function fillWeather(res, hist) {
     const d = res.data, c = d.current, dy = d.daily;
     const [icn, txt] = wmo(c.weather_code);
@@ -662,11 +780,12 @@
     S.fish = { now: fnow, ctx: fctx, days: fdays, sr: dy.sunrise && dy.sunrise[i0] ? hourOf(dy.sunrise[i0]) : null, ss: dy.sunset && dy.sunset[i0] ? hourOf(dy.sunset[i0]) : null };
     let bestDay = -1;
     fdays.forEach((x, i) => { if (x.score >= 50 && (bestDay < 0 || x.score > fdays[bestDay].score)) bestDay = i; });
-    const tgt = curTarget(), fishy = !tgt || tgt.kind === 'temp' || typeOf(tgt) === 'fish';
-    $('#wxFish').innerHTML = !fishy ? '' : '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
+    const tgt = curTarget(), fishy = !tgt || tgt.kind === 'temp' || typeOf(tgt) === 'fish', tty = fishy ? 'fish' : typeOf(tgt);
+    $('#wxFish').innerHTML = !fishy ? mainRowHtml(tty, res) : '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
       ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(old ? 'по погоде от ' + whenText(res.t) + ', данные устарели' : (fnow.warn || ((fctx.ice ? 'Подлёдная' : 'Открытая вода') + ' · почему такая оценка'))) + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     if (fishy) $('#bFish').addEventListener('click', showFish);
-    $('#miniFish').innerHTML = fishy ? '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>' : '';
+    else { const bm = $('#bMain'); if (bm) bm.addEventListener('click', tty === 'camp' ? showNights : showDaylight); }
+    $('#miniFish').innerHTML = fishy ? '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>' : typeTag(tty, d);
 
     $('#wxChips').innerHTML =
       '<span class="chip">' + ic('wind', 18) + rnd(c.wind_speed_10m) + ' км/ч</span>' +
@@ -679,11 +798,14 @@
       '<div class="stat"><span class="l">' + ic('cloud', 14, 'currentColor', 2) + 'Облачность</span><span class="v">' + rnd(c.cloud_cover) + '%</span><span class="s">' + esc(txt.toLowerCase()) + '</span></div>' +
       '<div class="stat"><span class="l">' + ic('drop', 14, 'currentColor', 2) + 'Осадки</span><span class="v">' + (d0 < dy.time.length ? precipTxt : '—') + '</span><span class="s">сегодня</span></div>';
 
+    const nmap = {}; if (tty === 'camp') nightsOf(d).forEach((x) => { nmap[x.i] = x.min; });
     $('#wxForecast').innerHTML = fdays.length ? '<div class="forecast">' + fdays.map((f, k) => {
       const i = f.i;
       return '<div class="fday" data-l="' + f.lvl + '"><span class="d">' + esc(f.name) + '</span>' + ic(wmo(dy.weather_code[i])[0], 26, 'currentColor', 1.6) +
         '<span class="hi">' + fmtT(dy.temperature_2m_max[i]) + '</span><span class="lo">' + fmtT(dy.temperature_2m_min[i]) + '</span>' +
-        '<span class="fs' + (k === bestDay ? ' best' : '') + '" title="Клёв ' + f.score + ' из 100" aria-label="Клёв ' + f.score + ' из 100">' + f.score + '</span></div>';
+        (fishy ? '<span class="fs' + (k === bestDay ? ' best' : '') + '" title="Клёв ' + f.score + ' из 100" aria-label="Клёв ' + f.score + ' из 100">' + f.score + '</span>'
+          : tty === 'camp' ? (nmap[i] != null ? '<span class="fs t-camp" aria-label="Ночью ' + fmtT(nmap[i]) + '">' + ic('moon', 12, 'currentColor', 2.4) + fmtT(nmap[i]) + '</span>' : '')
+            : (dy.sunset && dy.sunset[i] ? '<span class="fs t-poi" aria-label="Закат ' + hmS(dy.sunset[i]) + '">' + hmS(dy.sunset[i]) + '</span>' : '')) + '</div>';
     }).join('') + '</div>' : '';
 
     const w = Math.min(window.innerWidth, 480) - 40 - 32;
@@ -1121,7 +1243,7 @@
         let fs = null;
         try { fs = fishNow(r.data, pressureSeries(r.data), fishCtx(r.data, hs)); } catch (e) { /* нет данных для оценки */ }
         const html = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч' +
-          (fs && typeOf(s) === 'fish' ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
+          (typeOf(s) !== 'fish' ? typeTag(typeOf(s), r.data, ' fs-list') : fs ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
         listMem.set(s.id, { t: Date.now(), mode: S.fishMode, type: typeOf(s), html: html });
         const el2 = $('#lvList') && $('#lvList').querySelector('[data-w="' + s.id + '"]'); if (el2) el2.innerHTML = html;
       });
@@ -1156,7 +1278,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 31, date: '2026-11-12' };
+  const APP = { v: 32, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
