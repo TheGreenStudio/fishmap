@@ -6,7 +6,7 @@
 - `digest.mjs`: скрипт (погода Open-Meteo, новости Google News RSS, отправка через Telegram Bot API).
 - `filters.mjs`: фильтры новостей, дедупликация, проверка описаний (без сети).
 - `fishscore.mjs`: порт формулы клёва из `app.js`.
-- `test/`: тесты (`node --test "news-bot/test/*.test.mjs"` из корня репозитория); на GitHub их запускает `../.github/workflows/news-bot-tests.yml`.
+- `test/`: тесты без сети (`node --test "news-bot/test/*.test.mjs"` из корня репозитория); на GitHub их запускает `../.github/workflows/news-bot-tests.yml`. `e2e.test.mjs` прогоняет всю сводку как в Actions (заготовки данных из `test/helpers/fixtures.mjs`, подменённые время и Telegram из `test/helpers/preload.mjs`); `news.test.mjs` проверяет выбор новостей и раскрытие ссылок Google News; `appsync.test.mjs` сверяет формулу клёва с `app.js`.
 - `../.github/workflows/daily-digest.yml`: расписание и ручной запуск.
 
 ## Секреты (Settings, Secrets and variables, Actions)

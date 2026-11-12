@@ -181,7 +181,7 @@ async function tryFetch(url, init = {}) {
 }
 
 // Ссылка из Google News ведёт на редирект. Достаём адрес настоящей статьи.
-async function resolveGoogleLink(link) {
+export async function resolveGoogleLink(link) {
   const m = link.match(/\/articles\/([^?/]+)/);
   if (!m) return link;
   const id = m[1];
