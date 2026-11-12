@@ -471,7 +471,7 @@
     openModal('<div class="fhead" data-l="' + f.now.lvl + '">' + ringHtml(f.now.score) + '<div><h3>Клёв: ' + esc(f.now.label) + '</h3><p class="sub">' + f.now.score + ' из 100 · ' + esc(modeTxt) + '</p></div></div>' + seg +
       (f.now.warn ? '<p class="fwarn">' + ic('storm', 18, 'currentColor', 1.8) + '<span>' + esc(f.now.warn) + '</span></p>' : '') +
       '<div class="fparts">' + rows + '</div>' + best +
-      '<h4 class="fh4">Лучшие дни</h4><div class="fdays">' + days + '</div>' +
+      (days ? '<h4 class="fh4">Лучшие дни</h4><div class="fdays">' + days + '</div>' : '') +
       (ice ? '<p class="fwarn fice">' + ic('storm', 18, 'currentColor', 1.8) + '<span>Лёд в приложении только оценка по морозам последних недель. Всегда проверяйте толщину пешнёй: ходить можно от 10 см чистого льда. На реках и у течения лёд ненадёжен, мы это не учитываем. Не ходите одни.</span></p>' : '') +
       '<p class="fnote">Это ориентир по погоде, не гарантия. Не учитываются ' + (ice ? 'реальная толщина и снег на льду, ' : 'температура и уровень воды, ') + 'вид рыбы и ваша точка. Итог строже простой суммы частей. Давление считается косвенным признаком: прямого научного подтверждения связи с клёвом мало, зато много наблюдений рыбаков.</p>' +
       '<div class="row"><button class="btn btn-primary" id="fOk" type="button">Понятно</button></div>');
@@ -586,6 +586,7 @@
     $('#miniWx').innerHTML = ic(icn, 22, 'currentColor', 1.8) + fmtT(c.temperature_2m);
     const fctx = fishCtx(d, hist);
     const fnow = fishNow(d, series, fctx);
+    const old = res.stale && Date.now() - res.t > 12 * 3600e3;   // оценка «сейчас» по погоде старше 12 часов
     const fdays = dIdx.map((i) => {
       const fd = fishDay(d, i, fctx);
       return { i: i, name: dayName(dy.time[i]), score: fd.score, lvl: fd.lvl };
@@ -595,7 +596,7 @@
     let bestDay = -1;
     fdays.forEach((x, i) => { if (x.score >= 50 && (bestDay < 0 || x.score > fdays[bestDay].score)) bestDay = i; });
     $('#wxFish').innerHTML = '<button class="fishrow" id="bFish" type="button" data-l="' + fnow.lvl + '" aria-label="Условия клёва: ' + fnow.score + ' из 100, ' + fnow.label + '. Подробнее">' +
-      ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(fnow.warn || ((fctx.ice ? 'Подлёдная' : 'Открытая вода') + ' · почему такая оценка')) + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
+      ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(old ? 'по погоде от ' + whenText(res.t) + ', данные устарели' : (fnow.warn || ((fctx.ice ? 'Подлёдная' : 'Открытая вода') + ' · почему такая оценка'))) + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     $('#bFish').addEventListener('click', showFish);
     $('#miniFish').innerHTML = '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>';
 
@@ -695,7 +696,7 @@
     // если пользователь уже сам двигал карту, не возвращаем её к точке (например, когда догрузилась погода)
     if (!S.userMoved) focusTarget();
   }
-  const markMoved = () => { S.userMoved = true; };
+  const markMoved = () => { S.userMoved = true; S.mapTouched = true; };
   $('#map').addEventListener('pointerdown', markMoved, { passive: true });
   $('#map').addEventListener('wheel', markMoved, { passive: true });
   function closeSheet() {
@@ -1062,7 +1063,7 @@
         if ('serviceWorker' in navigator) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((r) => r.unregister())); }
         if ('caches' in window) { const ks = await caches.keys(); await Promise.all(ks.filter((k) => /shell/.test(k)).map((k) => caches.delete(k))); }
       } catch (e) { /* всё равно перезагружаем */ }
-      location.reload();
+      saveView(); location.reload();
     });
   }
   $('#bLayers').addEventListener('click', (e) => { e.stopPropagation(); menu.hidden ? openMenu() : closeMenu(); });
@@ -1114,6 +1115,8 @@
     const el = $('#syncStat'); if (el) el.textContent = syncText();
   }
   let syncing = false, syncAgain = false, syncTimer = 0;
+  const note = (t) => { if (S.notes) { if (!S.notes.includes(t)) S.notes.push(t); } else toast(t, 5000); };
+  function flushNotes() { const n = S.notes || []; S.notes = null; if (n.length) toast(n.join('. '), Math.min(9000, 3000 + 1500 * n.length)); }
   function scheduleSync(ms) {
     if (!S.code) return;
     clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms == null ? 1200 : ms);
@@ -1124,6 +1127,7 @@
     if (!S.code || !navigator.onLine) return;
     if (syncing) { syncAgain = true; return; }
     syncing = true; syncAgain = false; setSync('busy');
+    S.notes = [];   // сообщения синхронизации показываются одним уведомлением в конце, иначе перекрывают друг друга
     const code = S.code;   // если код сменили во время синхронизации, её результат не применяем
     const sameCode = () => S.code === code;
     try {
@@ -1146,7 +1150,7 @@
         if (lost.length && sameCode()) {
           const ids = new Set(lost.map((x) => x.id));
           S.spots = S.spots.filter((x) => !ids.has(x.id)); saveLocal();
-          toast(lost.length === 1 ? 'Точку «' + lost[0].name + '» удалил её автор, ваша правка не сохранилась' : 'Удалённых авторами точек: ' + lost.length + ', ваши правки не сохранились', 6000);
+          note(lost.length === 1 ? 'Точку «' + lost[0].name + '» удалил её автор, ваша правка не сохранилась' : 'Удалённых авторами точек: ' + lost.length + ', ваши правки не сохранились');
           if (S.sel && ids.has(S.sel)) closeSheet();
         }
       }
@@ -1168,7 +1172,7 @@
             else throw new Error('push ' + r1.status);
           }
           saveLocal();
-          if (rejected.length) toast('Не удалось отправить в группу: ' + rejected.slice(0, 3).map((n) => '«' + n + '»').join(', ') + '. Измените точку и попробуйте снова', 6000);
+          if (rejected.length) note('Не удалось отправить в группу: ' + rejected.slice(0, 3).map((n) => '«' + n + '»').join(', ') + '. Измените точку и попробуйте снова');
         } else throw new Error('push ' + r.status);
       }
       r = await sb('spots?select=*&order=created_at.asc');
@@ -1197,12 +1201,18 @@
       const first = !S.sync.t;
       setSync('ok');
       refreshAfterSync();
-      if (first) toast('Подключено. Точек в группе: ' + rows.length);
-      else if (added) toast('Новых точек: ' + added);
+      if (first) note('Подключено. Точек в группе: ' + rows.length);
+      else if (added) note('Новых точек: ' + added);
+      // первый вход в группу на новом телефоне: показать точки группы, если карту ещё не трогали
+      if (first && !S.mapTouched && !S.viewRestored && !S.sel && !S.temp) {
+        const vis = seasonSpots().length ? seasonSpots() : S.spots;
+        if (vis.length > 1) map.fitBounds(L.latLngBounds(vis.map((x) => [x.lat, x.lon])).pad(0.25), { maxZoom: 13 });
+        else if (vis.length === 1) map.setView([vis[0].lat, vis[0].lon], 12);
+      }
     } catch (e) {
       setSync('err');
     } finally {
-      syncing = false;
+      syncing = false; flushNotes();
       if (syncAgain) scheduleSync(400);
     }
   }
@@ -1213,7 +1223,7 @@
     if (lv.classList.contains('open')) renderListItems();
     if (S.sel) {
       const x = findSpot(S.sel);
-      if (!x) { closeSheet(); toast('Эту точку удалил её автор'); return; }
+      if (!x) { closeSheet(); note('Эту точку удалил её автор'); return; }
       const ti = body.querySelector('.title'), su = body.querySelector('.sub');
       if (ti) ti.textContent = x.name;
       const mt = body.querySelector('.mini-title'); if (mt) mt.textContent = x.name;
@@ -1537,10 +1547,10 @@
       if (r.ok) { S.ptomb = S.ptomb.filter((x) => x !== path); savePhotos(); }
     }
     const items = await idbAll().catch(() => []);
-    let failed = 0;
+    let failed = 0, droppedPh = 0;
     for (const it of items) {
       const sp = findSpot(it.spot_id);
-      if (!sp) { await idbDel(it.id); dropPending(it.id); continue; }
+      if (!sp) { await idbDel(it.id); dropPending(it.id); droppedPh++; continue; }
       // точки ещё нет на сервере (не отправилась или база её не приняла): фото ждёт, иначе строка фото не запишется и фото потеряется
       if (sp.dirty && !sp.srv) continue;
       try {
@@ -1564,6 +1574,7 @@
     const prow = await r2.json();
     if (!sameCode()) return;
     S.photos = prow.filter((x) => ids.has(x.spot_id)); savePhotos();
+    if (droppedPh) note('Не загружено фото: ' + droppedPh + ' (точку удалили)');
     if (failed) throw new Error('upload failed: ' + failed);
   }
   idbAll().then((items) => {
@@ -1649,7 +1660,9 @@
     const gone = new Set(S.ctomb);
     const rows = crows.filter((x) => ids.has(x.spot_id) && !gone.has(x.id))
       .map((x) => ({ id: x.id, spot_id: x.spot_id, author: x.author || '', owner: x.author_id || '', body: x.body, created: Date.parse(x.created_at) }));
+    const lostC = S.comments.filter((c) => c.dirty && !ids.has(c.spot_id)).length;
     S.comments = rows.concat(S.comments.filter((c) => c.dirty && ids.has(c.spot_id))); saveComments();
+    if (lostC) note('Не отправлено отзывов: ' + lostC + ' (точку удалили)');
   }
 
   /* ---------- поиск: координаты, свои точки, названия (OpenStreetMap Nominatim, бесплатно) ---------- */
@@ -1741,7 +1754,9 @@
     if (sWeb) {
       rows.push('<div class="shead">Найдено на карте</div>');
       if (!sWeb.length) rows.push('<div class="smsg">Ничего не найдено. Попробуйте другое написание или латиницу.</div>');
-      sWeb.forEach((r, i) => { const l = placeLabel(r); rows.push(row('sp', 'pin', l.title, l.sub, 'data-act="place" data-i="' + i + '"')); });
+      // расстояние от центра карты: сразу видно, если нашлось что-то на другом конце света
+      const mc = map.getCenter(), here = { lat: mc.lat, lon: mc.lng };
+      sWeb.forEach((r, i) => { const l = placeLabel(r); rows.push(row('sp', 'pin', l.title, fmtDist(distance(here, { lat: +r.lat, lon: +r.lon })) + ' · ' + l.sub, 'data-act="place" data-i="' + i + '"')); });
     }
     if (msg) rows.push('<div class="smsg warn">' + esc(msg) + '</div>');
     if (!rows.length) rows.push('<div class="smsg">Введите название места или координаты, например 51.0447, -114.0719</div>');
@@ -1826,6 +1841,16 @@
   mo.observe(sPanel, { attributes: true, attributeFilter: ['hidden'] });
   mo.observe(document.body, { childList: true });
 
+  // вид карты и открытая точка переживают перезагрузку при обновлении приложения
+  function saveView() {
+    try { const c = map.getCenter(); sessionStorage.setItem('fishmap.view', JSON.stringify({ lat: c.lat, lon: c.lng, z: map.getZoom(), sel: S.sel, t: Date.now() })); } catch (e) { /* не критично */ }
+  }
+  function takeView() {
+    try {
+      const v = JSON.parse(sessionStorage.getItem('fishmap.view') || 'null'); sessionStorage.removeItem('fishmap.view');
+      return v && Date.now() - v.t < 30 * 60e3 && isFinite(v.lat) && isFinite(v.lon) ? v : null;
+    } catch (e) { return null; }
+  }
   function updateWxProtect() {
     wxProtect = new Set();
     S.spots.slice(0, 300).forEach((s) => { wxProtect.add('fishmap.wx.' + (+s.lat).toFixed(2) + ',' + (+s.lon).toFixed(2)); wxProtect.add(histKey(+s.lat, +s.lon)); });
@@ -1868,8 +1893,12 @@
     renderMarkers();
     // стартовый масштаб по точкам текущего сезона (скрытые точки другого сезона не растягивают карту)
     const vis = seasonSpots().length ? seasonSpots() : S.spots;
-    if (vis.length > 1) map.fitBounds(L.latLngBounds(vis.map((s) => [s.lat, s.lon])).pad(0.25), { maxZoom: 13 });
+    const saved = takeView();
+    if (saved) map.setView([saved.lat, saved.lon], saved.z || 10);
+    else if (vis.length > 1) map.fitBounds(L.latLngBounds(vis.map((s) => [s.lat, s.lon])).pad(0.25), { maxZoom: 13 });
     else if (vis.length === 1) map.setView([vis[0].lat, vis[0].lon], 12);
+    S.viewRestored = !!saved;
+    if (saved && saved.sel && findSpot(saved.sel)) openSpot(saved.sel, 'peek');
     updateHint();
     checkJoin(); checkHash();
     refreshAutoSeason();
@@ -1886,6 +1915,7 @@
         if (typing || draft || !modal.hidden || $('#viewer')) return;
         if (!document.hidden && anyOverlay()) return;
         if (flushDescr) flushDescr();
+        saveView();
         reloaded = true; location.reload();
       };
       navigator.serviceWorker.addEventListener('controllerchange', () => {
