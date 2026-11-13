@@ -33,7 +33,7 @@ html[data-theme=dark]{
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;margin:0}
 /* iPhone: без автоувеличения текста в горизонтальном положении и без двойного тапа-зума по кнопкам */
-html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;overscroll-behavior:none}
 button,a,input,select,textarea,label,[role=button]{touch-action:manipulation}
 body{font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.4;color:var(--text);background:var(--bg);overflow:hidden;overscroll-behavior:none}
 button{font:inherit;color:inherit;cursor:pointer;border:0;background:none;padding:0}
@@ -208,7 +208,7 @@ textarea{resize:none;min-height:96px}
 
 /* modal */
 .modal{position:fixed;inset:0;z-index:1000;background:var(--scrim);display:flex;align-items:flex-end;justify-content:center;padding:0}
-.modal-card{max-height:calc(100dvh - 48px);overflow-y:auto;width:100%;max-width:480px;background:var(--surface);border-radius:28px 28px 0 0;padding:22px 20px calc(20px + var(--safe-b));animation:up .22s cubic-bezier(.2,.8,.2,1)}
+.modal-card{max-height:calc(100dvh - 48px);overflow-y:auto;overscroll-behavior:contain;width:100%;max-width:480px;background:var(--surface);border-radius:28px 28px 0 0;padding:22px 20px calc(20px + var(--safe-b));animation:up .22s cubic-bezier(.2,.8,.2,1)}
 @keyframes up{from{transform:translateY(30px);opacity:0}to{transform:none;opacity:1}}
 .modal-card h3{font-size:20px;font-weight:700;margin-bottom:4px}
 .modal-card .sub{margin:0 0 14px}
@@ -329,7 +329,7 @@ textarea{resize:none;min-height:96px}
 .srow{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 18px;color:var(--muted);flex:none}
 .srow input{flex:1;min-width:0;height:48px;border:0;outline:0;background:transparent;font:inherit;font-size:16px;color:var(--text)}
 .srow input::-webkit-search-cancel-button{display:none}
-.slist{overflow-y:auto;border-top:1px solid var(--border);padding:6px;-webkit-overflow-scrolling:touch}
+.slist{overflow-y:auto;overscroll-behavior:contain;border-top:1px solid var(--border);padding:6px;-webkit-overflow-scrolling:touch}
 .slist:empty{display:none}
 .sres{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:10px;border-radius:14px;color:var(--text)}
 .sres:active,.sres:hover{background:var(--surface2)}
@@ -402,3 +402,14 @@ body.is-offline #filterMenu{top:calc(192px + var(--safe-t));max-height:calc(100d
 .leaflet-bottom{padding-bottom:var(--safe-b)}
 .leaflet-right{padding-right:var(--safe-r)}
 .leaflet-left{padding-left:var(--safe-l)}
+
+/* окно выше экрана (крупный системный шрифт, маленький телефон): кнопки внизу окна всегда видны */
+.modal-card>.row:last-child{position:sticky;bottom:calc(-20px - var(--safe-b));background:var(--surface);padding:10px 0 calc(4px + var(--safe-b));margin-top:10px;margin-bottom:calc(-1 * var(--safe-b));z-index:1}
+/* очень узкий экран (Android с крупным шрифтом, сложенный телефон): название точки на всю ширину, кнопки шапки над ним */
+@media (max-width:300px){
+  .head{flex-wrap:wrap;row-gap:4px}
+  .head .hbtns{order:1;margin-left:auto}
+  .head .titlecol{order:2;flex:1 1 100%}
+  .thumb{width:52px;height:52px;border-radius:12px}
+  .card{gap:10px}
+}

@@ -208,7 +208,7 @@
     const dot = $('#fDot'), bar = $('#fBar'); if (!dot || !bar) return;
     dot.hidden = !filterActive();
     if (!filterActive()) { bar.hidden = true; bar.innerHTML = ''; bar.dataset.txt = ''; return; }
-    const txt = !S.types.length ? 'Все типы скрыты'
+    const txt = !S.types.length ? 'Все типы скрыты' : window.innerWidth < 300 ? 'Фильтр' : window.innerWidth < 340 ? 'Фильтр включён'
       : 'Показаны: ' + (S.types.length < TYPE_KEYS.length ? S.types.map((k) => TYPES[k]).join(', ') + (S.kidsOnly ? ' · с детьми' : '') : 'только с детской площадкой');
     bar.hidden = false;
     // строка объявляется экранным диктором: перерисовываем, только когда текст изменился (метки перерисовываются при каждой синхронизации)
@@ -1285,7 +1285,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 37, date: '2026-11-12' };
+  const APP = { v: 38, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
