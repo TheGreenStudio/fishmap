@@ -36,6 +36,17 @@
   const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); });
   const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+  // fetch с таймаутом на весь ответ, включая чтение тела: если связь оборвалась посреди ответа,
+  // обычный fetch ждёт тело бесконечно, и синхронизация или погода зависали до перезапуска приложения
+  async function fetchT(url, opt, ms) {
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), ms);
+    try {
+      const r = await fetch(url, Object.assign({}, opt || {}, { signal: ctl.signal }));
+      const noBody = [101, 103, 204, 205, 304].includes(r.status);
+      const buf = noBody ? null : await r.arrayBuffer();
+      return new Response(buf, { status: r.status, statusText: r.statusText, headers: r.headers });
+    } finally { clearTimeout(to); }
+  }
   const rnd = Math.round;
   const APP_URL = location.origin + location.pathname;
 
@@ -481,10 +492,8 @@
     const key = histKey(lat, lon), cached = lsGet(key, null);
     if (cached && cached.data && Date.now() - cached.t < HIST_TTL) return cached.data;
     try {
-      const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 7000);
-      const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(2) + '&longitude=' + lon.toFixed(2) +
-        '&daily=temperature_2m_max,temperature_2m_min&past_days=30&forecast_days=1&timezone=auto', { signal: ctl.signal });
-      clearTimeout(to);
+      const r = await fetchT('https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(2) + '&longitude=' + lon.toFixed(2) +
+        '&daily=temperature_2m_max,temperature_2m_min&past_days=30&forecast_days=1&timezone=auto', {}, 9000);
       if (!r.ok) throw new Error('http ' + r.status);
       const j = await r.json();
       const data = { time: j.daily.time, tmax: j.daily.temperature_2m_max, tmin: j.daily.temperature_2m_min };
@@ -643,10 +652,7 @@
       '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset' +
       '&forecast_days=4&timezone=auto&wind_speed_unit=kmh';
     try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 9000);
-      const r = await fetch(url, { signal: ctl.signal });
-      clearTimeout(to);
+      const r = await fetchT(url, {}, 12000);
       if (!r.ok) throw new Error('http ' + r.status);
       const data = await r.json();
       cacheSet(key, { t: Date.now(), data });
@@ -1333,13 +1339,13 @@
       if (!silent) map.setView([S.loc.lat, S.loc.lon], Math.max(map.getZoom(), 13));
       $('#toast').classList.remove('show');
       if (cb) cb();
-    }, () => toast('Не удалось определить позицию. Разрешите доступ к геолокации'), { enableHighAccuracy: true, timeout: 12000 });
+    }, (e) => toast(e && e.code === 1 ? 'Нет доступа к геолокации. Разрешите его в настройках браузера' : 'Не удалось определить позицию. Попробуйте ещё раз на открытом месте', 5000), { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
   }
   $('#bLocate').addEventListener('click', () => locate(false));
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 42, date: '2026-11-13' };
+  const APP = { v: 43, date: '2026-11-13' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -1474,14 +1480,11 @@
   const nameHex = () => Array.from(new TextEncoder().encode((S.me || '').trim())).map((b) => b.toString(16).padStart(2, '0')).join('');
   async function sb(path, opt) {
     opt = opt || {};
-    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
-    try {
-      return await fetch(SB.url + '/rest/v1/' + path, {
-        method: opt.method || 'GET', signal: ctl.signal,
-        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'x-author-name': nameHex(), 'Content-Type': 'application/json' }, opt.headers || {}),
-        body: opt.body ? JSON.stringify(opt.body) : undefined
-      });
-    } finally { clearTimeout(to); }
+    return fetchT(SB.url + '/rest/v1/' + path, {
+      method: opt.method || 'GET',
+      headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'x-author-name': nameHex(), 'Content-Type': 'application/json' }, opt.headers || {}),
+      body: opt.body ? JSON.stringify(opt.body) : undefined
+    }, 20000);
   }
   function syncText() {
     const st = S.sync.state;
@@ -1777,11 +1780,8 @@
 
   async function storage(method, path, opt) {
     opt = opt || {};
-    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 45000);
-    try {
-      return await fetch(SB.url + '/storage/v1/' + path, { method: method, signal: ctl.signal,
-        headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'x-author-name': nameHex() }, opt.headers || {}), body: opt.body });
-    } finally { clearTimeout(to); }
+    return fetchT(SB.url + '/storage/v1/' + path, { method: method,
+      headers: Object.assign({ apikey: SB.key, 'x-group-code': S.code, 'x-author-id': S.dev, 'x-author-name': nameHex() }, opt.headers || {}), body: opt.body }, 60000);
   }
 
   // сжатие: до 1600 px по длинной стороне, JPEG; перерисовка в canvas убирает EXIF (геометки)
@@ -1868,7 +1868,7 @@
       // подписанная ссылка живёт час: при долгой работе приложения её нужно обновить, иначе фото не откроется
       const sg = signedUrls.get(path);
       if (!sg || sg.exp <= Date.now()) await signPaths([path]);
-      const r = await fetch(signedUrls.get(path).url);
+      const r = await fetchT(signedUrls.get(path).url, {}, 45000);
       if (!r.ok) return '';
       const b = await r.blob(); cachePut(path, b);
       const u = URL.createObjectURL(b); phMem.set(path, u); return u;
@@ -2366,7 +2366,8 @@
     S.spots = loadLocal();
     lastSaved = new Map(S.spots.map((x) => [x.id, sigOf(x)]));
     let cfg = { center: [51.0447, -114.0719], zoom: 10, spots: [] };
-    try { const r = await fetch('spots.json', { cache: 'no-cache' }); cfg = await r.json(); } catch (e) {}
+    // без ограничения по времени медленная сеть при запуске (без service worker, например в браузере Telegram на iPhone) оставляла карту пустой
+    try { const r = await fetchT('spots.json', { cache: 'no-cache' }, 5000); if (r.ok) { const j = await r.json(); if (j && typeof j === 'object') cfg = j; } } catch (e) {}
     S.shared = (cfg.spots || []).map((s) => Object.assign({}, s, { shared: true, created: s.created || 0, type: isType(s.kind || s.type) ? (s.kind || s.type) : 'fish', kids: s.kids === true }));
     S.shared.forEach((s) => { if (!findSpot(s.id)) S.spots.push(s); });
     updateWxProtect(); pruneCache(120);
