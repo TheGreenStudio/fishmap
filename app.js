@@ -317,7 +317,7 @@
   const dirName = (d) => ['северный', 'северо-восточный', 'восточный', 'юго-восточный', 'южный', 'юго-западный', 'западный', 'северо-западный'][rnd(d / 45) % 8];
   const hhmm = (t) => new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   const whenText = (t) => new Date(t).toDateString() === new Date().toDateString() ? hhmm(t) : new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) + ', ' + hhmm(t);
-  function fmtDist(m) { return m < 1000 ? rnd(m / 10) * 10 + ' м' : (m < 10000 ? (m / 1000).toFixed(1).replace('.', ',') : rnd(m / 1000)) + ' км'; }
+  function fmtDist(m) { return m < 995 ? rnd(m / 10) * 10 + ' м' : (m < 9950 ? (m / 1000).toFixed(1).replace('.', ',') : rnd(m / 1000)) + ' км'; }
   function distance(a, b) {
     const R = 6371000, r = Math.PI / 180;
     const dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
@@ -358,7 +358,7 @@
   const F_PDELTA = [[-8, 3], [-5, 6], [-3, 14], [-1, 18], [0, 10], [1, 9], [3, 6], [6, 3], [9, 1]];
   const F_PABS = [[980, 0], [995, 2], [1005, 5], [1010, 7], [1022, 7], [1030, 4], [1040, 2]];
   const F_WIND = [[0, 20], [5, 20], [10, 15], [16, 9], [22, 4], [28, 1], [36, 0]];
-  const F_CLOUD = [[0, 4], [30, 8], [60, 12], [85, 14], [100, 13]];
+  const F_CLOUD = [[0, 4], [30, 8], [60, 12], [85, 15], [100, 14]];
   const F_RAIN = [[0, 10], [0.5, 8], [2, 5], [5, 2], [10, 0]];
   // подлёдная
   const F_WIND_ICE = [[0, 15], [6, 15], [12, 10], [20, 5], [28, 1], [36, 0]];
@@ -366,9 +366,11 @@
   const F_CLOUD_ICE = [[0, 5], [30, 7], [60, 9], [85, 10], [100, 10]];
   const F_RAIN_ICE = [[0, 5], [0.5, 4], [3, 2], [8, 0]];
 
-  // ощущаемая температура с ветром (формула Environment Canada, для t ≤ 0 и ветра > 5 км/ч)
+  // холод с ветром (индекс Environment Canada): до +10 °C; при ветре слабее 5 км/ч — формула EC для слабого ветра,
+  // она плавно переходит в основную (раньше оценка прыгала на 9 баллов около 0 °C и на 5 баллов около 5 км/ч)
   function windChill(t, v) {
-    if (t > 0 || v <= 5) return t;
+    if (t > 10) return t;
+    if (v < 5) return t + (-1.59 + 0.1345 * t) / 5 * Math.max(0, v);
     const p = Math.pow(v, 0.16);
     return 13.12 + 0.6215 * t - 11.37 * p + 0.3965 * t * p;
   }
@@ -379,8 +381,8 @@
     if (c === 85 || c === 86) return 5;
     if (c >= 71 && c <= 77) return 3;
     if (c === 65 || c === 67) return 10;
-    if (c === 63 || c === 66) return 5;
-    if (c === 61) return 2;
+    if (c === 63) return 5;
+    if (c === 61 || c === 66) return 2;
     if (c >= 51 && c <= 57) return 1.5;
     return 0;
   }
@@ -459,7 +461,7 @@
     const eff = i.wind + 0.5 * Math.max(0, i.gust - i.wind);
     parts.push({ name: 'Ветер', max: 15, pts: interp(F_WIND_ICE, eff),
       text: (i.dayMode ? 'до ' : '') + rnd(i.wind) + ' км/ч, порывы ' + rnd(i.gust) + (eff <= 8 ? ', слабый' : eff <= 15 ? ', лёгкий' : eff <= 22 ? ', заметный, холодно у лунки' : eff <= 30 ? ', сильный, метёт снег' : ', очень сильный') });
-    parts.push({ name: 'Ощущаемая температура', max: 20, pts: cp,
+    parts.push({ name: 'Холод с ветром', max: 20, pts: cp,
       text: fmtT(chill) + (i.thaw ? ', оттепель, лёд слабеет' : chill <= -35 ? ', опасный мороз' : chill <= -27 ? ', очень холодно' : chill <= -18 ? ', морозно' : chill <= -3 ? ', комфортно для льда' : chill <= 1 ? ', около нуля' : ', тепло, лёд слабеет') });
     const cat = i.iceCat || 'unknown';
     const ip = { none: 0, thin: 2, check: 9, ok: 15, unknown: 7 }[cat];
@@ -545,6 +547,19 @@
     return Math.max(mx[i] == null ? -99 : mx[i], i === 0 ? ctx.yMax : (mx[i - 1] == null ? -99 : mx[i - 1])) > 2;   // вчера: из истории или из прогноза
   };
 
+  // осадки «сейчас»: последние 2 часа и ближайшие 3 по почасовому прогнозу (утренний дождь не портит вечер);
+  // в старом кэше без почасовых осадков — как раньше, 60% суточной суммы
+  function precipNear(d) {
+    const H = d.hourly || {}, c = d.current || {}, dy = d.daily || {};
+    const k = H.time && H.precipitation && c.time ? H.time.indexOf(c.time.slice(0, 13) + ':00') : -1;
+    if (k >= 0) {
+      let sum = 0, n = 0;
+      for (let j = k - 1; j <= k + 3; j++) { const v = H.precipitation[j]; if (v != null) { sum += v; n++; } }
+      if (n) return sum;
+    }
+    const i0 = dy.time ? dayIdx(d) : 0;
+    return ((dy.precipitation_sum || [])[i0] || 0) * 0.6;
+  }
   function fishNow(d, series, ctx) {
     ctx = ctx || fishCtx(d, null);
     const c = d.current, dy = d.daily, i0 = ctx.i0 || 0;
@@ -553,7 +568,7 @@
       temp: c.temperature_2m, pressure: c.pressure_msl,
       dp: series.length >= 7 ? series[series.length - 1] - series[series.length - 7] : null,
       wind: c.wind_speed_10m, gust: c.wind_gusts_10m, cloud: c.cloud_cover,
-      precip: Math.max((dy.precipitation_sum[i0] || 0) * 0.6, codePrecip(c.weather_code)), code: c.weather_code,
+      precip: Math.max(precipNear(d), codePrecip(c.weather_code)), code: c.weather_code,
       hour: hourOf(c.time), sr: dy.sunrise && dy.sunrise[i0] ? hourOf(dy.sunrise[i0]) : null, ss: dy.sunset && dy.sunset[i0] ? hourOf(dy.sunset[i0]) : null
     });
   }
@@ -672,8 +687,8 @@
   function trend(series) {
     if (series.length < 7) return { k: 'flat', text: 'стабильно' };
     const diff = series[series.length - 1] - series[series.length - 7];
-    if (diff > 1.5) return { k: 'up', text: 'растёт за 6 ч' };
-    if (diff < -1.5) return { k: 'down', text: 'падает за 6 ч' };
+    if (diff > 1) return { k: 'up', text: 'растёт за 6 ч' };     // те же пороги, что в окне клёва
+    if (diff < -1) return { k: 'down', text: 'падает за 6 ч' };
     return { k: 'flat', text: 'стабильно' };
   }
   function sparkSvg(series, w) {
@@ -691,7 +706,7 @@
   const nowAt = (d) => new Date(Date.now() + (d.utc_offset_seconds || 0) * 1000).toISOString().slice(0, 16);
   const hmS = (t) => String(+t.slice(11, 13)) + ':' + t.slice(14, 16);
   const minsBetween = (a, b) => rnd((Date.parse(b.slice(0, 16) + ':00Z') - Date.parse(a.slice(0, 16) + ':00Z')) / 60000);
-  const durTxt = (m) => (!isFinite(m) || m < 0 ? '' : (m >= 60 ? Math.floor(m / 60) + ' ч ' : '') + (m % 60) + ' мин');
+  const durTxt = (m) => (!isFinite(m) || m < 0 ? '' : m >= 60 ? Math.floor(m / 60) + ' ч' + (m % 60 ? ' ' + (m % 60) + ' мин' : '') : m + ' мин');
   const wdShort = (day) => new Date(day + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' });
   const nightWord = (t) => (t <= -10 ? 'мороз' : t < 0 ? 'ниже нуля' : '');
   const mmTxt = (x) => x.toFixed(1).replace('.', ',') + ' мм';
@@ -1345,7 +1360,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 43, date: '2026-11-13' };
+  const APP = { v: 44, date: '2026-11-13' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -2171,8 +2186,8 @@
       const v = toks.map(Number);
       if (v.length === 2) return checkLL(v[0], v[1], true);
       const dms = (a) => (a[0] < 0 || Object.is(a[0], -0) ? -1 : 1) * (Math.abs(a[0]) + (a[1] || 0) / 60 + (a[2] || 0) / 3600);
-      if (v.length === 4 && v[1] < 60 && v[3] < 60) return checkLL(dms(v.slice(0, 2)), dms(v.slice(2)), false);
-      if (v.length === 6 && v[1] < 60 && v[2] < 60 && v[4] < 60 && v[5] < 60) return checkLL(dms(v.slice(0, 3)), dms(v.slice(3)), false);
+      if (v.length === 4 && v[1] >= 0 && v[1] < 60 && v[3] >= 0 && v[3] < 60) return checkLL(dms(v.slice(0, 2)), dms(v.slice(2)), false);
+      if (v.length === 6 && [v[1], v[2], v[4], v[5]].every((x) => x >= 0 && x < 60)) return checkLL(dms(v.slice(0, 3)), dms(v.slice(3)), false);
       return null;
     }
     const prefix = isH(toks[0]), comps = [];
