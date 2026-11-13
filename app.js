@@ -191,6 +191,48 @@
   // нельзя отдалиться дальше, чем мир заполняет экран: иначе карта повторяется и вокруг пустота
   const fitMinZoom = () => { try { map.setMinZoom(Math.max(2, map.getBoundsZoom(WORLD, true))); } catch (e) { /* размер ещё неизвестен */ } };
   map.on('resize', fitMinZoom);
+  // Safari на iPhone/iPad: когда карта отдалена до упора (весь мир), сведение пальцев
+  // отдаём Safari — он уменьшает страницу и показывает вкладки, как на обычных сайтах.
+  // Разведение пальцев (приближение) карта по-прежнему забирает себе.
+  (function pinchToSafari() {
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+    if (!ios || standalone) return;
+    const el = map.getContainer();
+    let start = 0, decided = false, mine = false;
+    const atMin = () => map.getZoom() <= map.getMinZoom() + 0.01;
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const sync = () => {
+      if (mine) return;
+      if (atMin()) { if (map.touchZoom.enabled()) map.touchZoom.disable(); }
+      else if (!map.touchZoom.enabled()) map.touchZoom.enable();
+    };
+    map.on('zoomend zoomlevelschange', sync);
+    el.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2 && !map.touchZoom.enabled()) { start = dist(e.touches); decided = false; }
+    }, { passive: true, capture: true });
+    el.addEventListener('touchmove', (e) => {
+      if (mine) { e.preventDefault(); return; }
+      if (e.touches.length !== 2 || !start) return;
+      const d = dist(e.touches) - start;
+      if (!decided) {
+        if (Math.abs(d) < 3) return;
+        decided = true;
+        if (d < 0) return; // сведение — не мешаем, жест достаётся Safari
+      } else if (d <= 3 || !e.cancelable) return; // пальцы развели обратно — забираем, если Safari ещё позволяет
+      e.preventDefault(); mine = true; // разведение — приближаем карту
+      map.touchZoom.enable(); map.touchZoom._onTouchStart(e);
+      if (map.touchZoom._startDist) map.touchZoom._startDist = start; // считаем от начала жеста
+    }, { passive: false, capture: true });
+    const end = (e) => {
+      if (e.touches.length >= 2) return;
+      start = 0; decided = false;
+      if (mine) { mine = false; setTimeout(sync, 0); }
+    };
+    el.addEventListener('touchend', end, { passive: true, capture: true });
+    el.addEventListener('touchcancel', end, { passive: true, capture: true });
+    map.whenReady(sync);
+  })();
   const layers = {
     osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, noWrap: true, attribution: '© OpenStreetMap' }),
     topo: L.tileLayer('https://tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, noWrap: true, attribution: '© OpenTopoMap, © OpenStreetMap' })
@@ -1285,7 +1327,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 38, date: '2026-11-12' };
+  const APP = { v: 39, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
