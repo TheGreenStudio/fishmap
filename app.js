@@ -107,7 +107,8 @@
   const TYPES = { fish: 'Рыбалка', camp: 'Кэмпинг', poi: 'Интересное' };
   const TYPE_KEYS = ['fish', 'camp', 'poi'];
   const GLYPH = { fish: 'fish', camp: 'tent', poi: 'bino' };
-  const typeOf = (s) => (s && TYPES[s.type] ? s.type : 'fish');
+  const isType = (k) => TYPE_KEYS.includes(k);
+  const typeOf = (s) => (s && isType(s.type) ? s.type : 'fish');
   S.types = (() => { const v = lsGet('fishmap.types', null); return Array.isArray(v) ? TYPE_KEYS.filter((k) => v.includes(k)) : TYPE_KEYS.slice(); })();
   S.kidsOnly = lsGet('fishmap.kidsOnly', false) === true;
   const KEY = 'fishmap.v3.spots';
@@ -122,7 +123,7 @@
     if (!Array.isArray(arr)) return [];
     // испорченные записи (нет объекта, id или координат) отбрасываем, чтобы не ронять всё приложение
     return arr.filter((s) => s && typeof s === 'object' && typeof s.id === 'string' && Number.isFinite(+s.lat) && Number.isFinite(+s.lon) && Math.abs(s.lat) <= 90 && Math.abs(s.lon) <= 180)
-      .map((s) => Object.assign(s, { lat: +s.lat, lon: +s.lon, name: typeof s.name === 'string' && s.name.trim() ? s.name : 'Без названия', season: (s.season === 'summer' || s.season === 'winter' || s.season === 'both') ? s.season : undefined, type: TYPES[s.type] ? s.type : undefined, kids: s.kids === true }));
+      .map((s) => Object.assign(s, { lat: +s.lat, lon: +s.lon, name: typeof s.name === 'string' && s.name.trim() ? s.name : 'Без названия', season: (s.season === 'summer' || s.season === 'winter' || s.season === 'both') ? s.season : undefined, type: isType(s.type) ? s.type : undefined, kids: s.kids === true }));
   }
   // Две копии приложения (вкладка и установленное) делят память телефона: перед записью забираем
   // неотправленные точки и удаления другой копии, иначе запись целиком стёрла бы их.
@@ -206,11 +207,14 @@
   function updateFilterUi() {
     const dot = $('#fDot'), bar = $('#fBar'); if (!dot || !bar) return;
     dot.hidden = !filterActive();
-    if (!filterActive()) { bar.hidden = true; bar.innerHTML = ''; return; }
+    if (!filterActive()) { bar.hidden = true; bar.innerHTML = ''; bar.dataset.txt = ''; return; }
     const txt = !S.types.length ? 'Все типы скрыты'
       : 'Показаны: ' + (S.types.length < TYPE_KEYS.length ? S.types.map((k) => TYPES[k]).join(', ') + (S.kidsOnly ? ' · с детьми' : '') : 'только с детской площадкой');
-    bar.innerHTML = '<span class="ft">' + esc(txt) + '</span><button type="button" id="fReset">' + (S.types.length ? 'Сбросить' : 'Показать все') + '</button>';
     bar.hidden = false;
+    // строка объявляется экранным диктором: перерисовываем, только когда текст изменился (метки перерисовываются при каждой синхронизации)
+    if (bar.dataset.txt === txt) return;
+    bar.dataset.txt = txt;
+    bar.innerHTML = '<span class="ft">' + esc(txt) + '</span><button type="button" id="fReset">' + (S.types.length ? 'Сбросить' : 'Показать все') + '</button>';
     $('#fReset').addEventListener('click', () => resetFilter());
   }
   const spotMarkers = new Map();
@@ -221,7 +225,7 @@
   const PIN_BODY = '<path class="pin-body" d="M22 50C22 50 5 33 5 21a17 17 0 0134 0c0 12-17 29-17 29z"/>';
   const glyphOf = (ty, winter) => (ty === 'fish' ? (winter ? P.fishw : P.fish) : P[GLYPH[ty]]);
   function pinHtml(kind, sel, winter, off, type, kids) {
-    const ty = TYPES[type] ? type : 'fish';
+    const ty = isType(type) ? type : 'fish';
     const glyph = kind === 'temp' ? P.plus : glyphOf(ty, winter);
     return '<div class="pinwrap ' + (kind === 'temp' ? 'temp ' : 't-' + ty + ' ') + (winter && kind !== 'temp' && ty === 'fish' ? 'winter ' : '') + (off ? 'off ' : '') + (sel ? 'sel' : '') + '"><div class="ring"></div>' +
       '<svg width="44" height="52" viewBox="0 0 44 52" aria-hidden="true">' + PIN_BODY +
@@ -716,9 +720,9 @@
     return '';
   }
   function staleNote(res) { return res.stale ? '<p class="fwarn">' + ic('cloud_off', 18, 'currentColor', 1.8) + '<span>Нет сети, прогноз от ' + whenText(res.t) + '</span></p>' : ''; }
-  function typeTag(ty, d, cls) {
-    if (ty === 'camp') { const n = nightNow(d); return n ? '<span class="fs t-camp' + (cls || '') + '" aria-label="Ночью ' + fmtT(n.min) + '">' + ic('moon', 12, 'currentColor', 2.4) + 'Ночью ' + fmtT(n.min) + '</span>' : ''; }
-    if (ty === 'poi') { const L = dayLight(d); return L ? '<span class="fs t-poi' + (cls || '') + '">' + (L.state === 'after' ? 'Закат завтра ' : 'Закат ') + hmS(L.ss) + '</span>' : ''; }
+  function typeTag(ty, d, cls, short) {
+    if (ty === 'camp') { const n = nightNow(d); return n ? '<span class="fs t-camp' + (cls || '') + '" aria-label="Ночью ' + fmtT(n.min) + '">' + ic('moon', 12, 'currentColor', 2.4) + (short ? '' : 'Ночью ') + fmtT(n.min) + '</span>' : ''; }
+    if (ty === 'poi') { const L = dayLight(d); return L ? '<span class="fs t-poi' + (cls || '') + '" aria-label="' + (L.state === 'after' ? 'Закат завтра ' : 'Закат ') + hmS(L.ss) + '">' + (short ? ic('sunset', 12, 'currentColor', 2.4) : (L.state === 'after' ? 'Закат завтра ' : 'Закат ')) + hmS(L.ss) + '</span>' : ''; }
     return '';
   }
   function showNights() {
@@ -788,7 +792,7 @@
       ringHtml(fnow.score) + '<span class="ftxt"><b>Клёв: ' + esc(fnow.label) + '</b><span>' + esc(old ? 'по погоде от ' + whenText(res.t) + ', данные устарели' : (fnow.warn || ((fctx.ice ? 'Подлёдная' : 'Открытая вода') + ' · почему такая оценка'))) + '</span></span>' + ic('chev_r', 20, 'currentColor', 2) + '</button>';
     if (fishy) $('#bFish').addEventListener('click', showFish);
     else { const bm = $('#bMain'); if (bm) bm.addEventListener('click', tty === 'camp' ? showNights : showDaylight); }
-    $('#miniFish').innerHTML = fishy ? '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>' : typeTag(tty, d);
+    $('#miniFish').innerHTML = fishy ? '<span class="fs" data-l="' + fnow.lvl + '">Клёв ' + fnow.score + '</span>' : typeTag(tty, d, '', true);
 
     $('#wxChips').innerHTML =
       '<span class="chip">' + ic('wind', 18) + rnd(c.wind_speed_10m) + ' км/ч</span>' +
@@ -1091,7 +1095,7 @@
   function saveDialog(p, presetName) {
     // свободный номер: «Точка N» не должна повторять уже существующее название
     const used = new Set(allSpots().map((x) => x.name)); let n = 1; while (used.has('Точка ' + n)) n++;
-    const lt = lsGet('fishmap.lastType', 'fish'), ty0 = TYPES[lt] ? lt : 'fish';
+    const lt = lsGet('fishmap.lastType', 'fish'), ty0 = isType(lt) ? lt : 'fish';
     const st = { type: ty0, season: defSeason(ty0), kids: false };
     openModal('<h3>Сохранить точку</h3><p class="sub">' + coordsText(p) + '</p>' +
       '<label for="fName">Название</label><input id="fName" class="input" maxlength="60" value="' + esc(presetName || 'Точка ' + n) + '" placeholder="Например: Bow River, мост">' +
@@ -1245,7 +1249,7 @@
         const c = r.data.current;
         let fs = null;
         try { fs = fishNow(r.data, pressureSeries(r.data), fishCtx(r.data, hs)); } catch (e) { /* нет данных для оценки */ }
-        const html = ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч' +
+        const html = '<span class="wt">' + ic(wmo(c.weather_code)[0], 16, 'currentColor', 1.8) + fmtT(c.temperature_2m) + ' · ' + rnd(c.wind_speed_10m) + ' км/ч</span>' +
           (typeOf(s) !== 'fish' ? typeTag(typeOf(s), r.data, ' fs-list') : fs ? '<span class="fs fs-list" data-l="' + fs.lvl + '" aria-label="Клёв ' + fs.score + ' из 100">Клёв ' + fs.score + '</span>' : '');
         listMem.set(s.id, { t: Date.now(), mode: S.fishMode, type: typeOf(s), html: html });
         const el2 = $('#lvList') && $('#lvList').querySelector('[data-w="' + s.id + '"]'); if (el2) el2.innerHTML = html;
@@ -1281,7 +1285,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 33, date: '2026-11-12' };
+  const APP = { v: 34, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -1369,6 +1373,8 @@
   function closeFilter() { fmenu.hidden = true; $('#bFilter').classList.remove('on'); }
   function openFilter() { closeMenu(); renderFilter(); fmenu.hidden = false; $('#bFilter').classList.add('on'); }
   function renderFilter() {
+    // панель перерисовывается целиком: возвращаем фокус на тот же переключатель (для клавиатуры и экранного диктора)
+    const a = document.activeElement, keep = a && fmenu.contains(a) ? (a.dataset.t ? 'input[data-t="' + a.dataset.t + '"]' : a.id ? '#' + a.id : a.dataset.v ? '#segFishMode button[data-v="' + a.dataset.v + '"]' : '') : '';
     const win = curSeason() === 'winter';
     const cnt = (k) => S.spots.filter((s) => typeOf(s) === k && inSeason(s) && (!S.kidsOnly || s.kids)).length;
     const ck = '<span class="cbx" aria-hidden="true">' + ic('check', 16, 'currentColor', 2.6) + '</span>';
@@ -1386,6 +1392,7 @@
       applyFilter();
     }));
     $('#fKidsOnly').addEventListener('change', (e) => { S.kidsOnly = e.target.checked; applyFilter(); });
+    if (keep) { const el = fmenu.querySelector(keep); if (el) el.focus({ preventScroll: true }); }
   }
   function applyFilter() {
     lsSet('fishmap.types', S.types); lsSet('fishmap.kidsOnly', S.kidsOnly);
@@ -2242,7 +2249,7 @@
     lastSaved = new Map(S.spots.map((x) => [x.id, sigOf(x)]));
     let cfg = { center: [51.0447, -114.0719], zoom: 10, spots: [] };
     try { const r = await fetch('spots.json', { cache: 'no-cache' }); cfg = await r.json(); } catch (e) {}
-    S.shared = (cfg.spots || []).map((s) => Object.assign({}, s, { shared: true, created: s.created || 0, type: TYPES[s.kind || s.type] ? (s.kind || s.type) : 'fish', kids: s.kids === true }));
+    S.shared = (cfg.spots || []).map((s) => Object.assign({}, s, { shared: true, created: s.created || 0, type: isType(s.kind || s.type) ? (s.kind || s.type) : 'fish', kids: s.kids === true }));
     S.shared.forEach((s) => { if (!findSpot(s.id)) S.spots.push(s); });
     updateWxProtect(); pruneCache(120);
     fitMinZoom();

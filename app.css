@@ -195,7 +195,8 @@ textarea{resize:none;min-height:96px}
 .card .ct{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .card .n{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card .m{font-size:13px;color:var(--muted)}
-.card .w{font-size:13px;display:flex;align-items:center;gap:6px;min-height:18px}
+.card .w{font-size:13px;display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;min-height:18px}
+.card .w .wt{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .card .w svg{color:var(--primary)}
 .card>svg{color:var(--muted);flex:none}
 .empty{text-align:center;padding:40px 24px;color:var(--muted)}
