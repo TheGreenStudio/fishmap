@@ -1327,7 +1327,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 39, date: '2026-11-12' };
+  const APP = { v: 40, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -1670,6 +1670,27 @@
   // (у них своя память) открывали карту без кода и просили ссылку ещё раз.
   const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   let manUrl = '', manBase = null;
+  // Клавиатура поверх страницы: Chrome в режиме «Версия для ПК» (по умолчанию на планшетах от 10")
+  // не читает interactive-widget и не уменьшает страницу. Тогда поднимаем окна и панели над клавиатурой сами.
+  (function kbLift() {
+    const vv = window.visualViewport;
+    if (!vv || IS_IOS) return;
+    const root = document.documentElement;
+    let last = -1;
+    const upd = () => {
+      const gap = vv.scale > 1.01 ? 0 : Math.round(window.innerHeight - vv.height);
+      const kb = gap > 80 ? gap : 0;
+      if (kb === last) return;
+      last = kb;
+      root.style.setProperty('--kb', kb + 'px');
+      root.classList.toggle('kb-open', kb > 0);
+      const el = document.activeElement;
+      if (kb && el && el.matches && el.matches('input,textarea')) setTimeout(() => { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) { /* не важно */ } }, 50);
+    };
+    vv.addEventListener('resize', upd);
+    window.addEventListener('resize', upd);
+    upd();
+  })();
   function syncUrlCode() {
     try {
       const parts = location.hash.slice(1).split('&').filter((x) => x && x.indexOf('k=') !== 0);

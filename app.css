@@ -218,9 +218,15 @@ textarea{resize:none;min-height:96px}
 
 @media (min-width:700px){
   .sheet,.listview{left:50%;right:auto;width:480px;transform:translateX(-50%)}
+  body.sheet-open .fbar{max-width:max(170px,calc(50vw - 268px - var(--safe-l)))}
   .listview{transform:translate(-50%,105%)}
   .listview.open{transform:translateX(-50%)}
 }
+/* клавиатура поверх страницы (Chrome «Версия для ПК» на планшетах) */
+html.kb-open .modal{padding-bottom:var(--kb)}
+html.kb-open .modal-card{max-height:calc(100dvh - 48px - var(--kb))}
+html.kb-open .sheet{bottom:var(--kb);max-height:calc(100dvh - 64px - var(--safe-t) - var(--kb))}
+html.kb-open .listview{bottom:var(--kb)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* fishing score */
