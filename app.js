@@ -924,9 +924,21 @@
     sheet.classList.toggle('is-full', st === 'full');
     sheet.classList.toggle('is-mini', st === 'mini');
     if (instant) sheet.classList.add('dragging');
-    sheet.style.setProperty('--h', heights[st] + 'px');
+    sheet.style.setProperty('--h', heights[st] + 'px'); markHigh(heights[st]);
     if (instant) { sheet.offsetHeight; sheet.classList.remove('dragging'); }
     if (st === 'mini') scroll.scrollTop = 0;
+  }
+  // широкий экран: карточка по центру; если она поднялась до строки фильтра, строку укорачиваем, чтобы «Сбросить» не ушла под карточку
+  function markHigh(h) {
+    let high = false;
+    const fb = $('#fBar');
+    if (fb && h > 0 && window.innerWidth >= 700) {
+      const kb = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--kb')) || 0;
+      const maxH = parseFloat(getComputedStyle(sheet).maxHeight) || h;
+      const top = window.innerHeight - kb - Math.min(h, maxH);
+      high = top < (parseFloat(getComputedStyle(fb).top) || 0) + 48;
+    }
+    document.body.classList.toggle('sheet-high', high);
   }
   function layoutSheet() {
     if (!sheet.classList.contains('open')) return;
@@ -940,7 +952,7 @@
   $('#map').addEventListener('wheel', markMoved, { passive: true });
   function closeSheet() {
     sheet.classList.remove('open');
-    sheet.style.setProperty('--h', '0px');
+    sheet.style.setProperty('--h', '0px'); markHigh(0);
     document.body.classList.remove('sheet-open');
     S.sel = null; S.temp = null; S.wxKey = '';
     setTempMarker(null); renderMarkers();
@@ -1058,7 +1070,7 @@
       if (Math.abs(e.clientY - startY) > 4) moved = true;
       const al = allowedStates();
       const h = clamp(startH + (startY - e.clientY), heights.mini * 0.9, heights[al[al.length - 1]]);
-      sheet.style.setProperty('--h', h + 'px');
+      sheet.style.setProperty('--h', h + 'px'); markHigh(h);
       v = (lastY - e.clientY) / ((e.timeStamp - lastT) || 1);
       lastY = e.clientY; lastT = e.timeStamp;
     });
@@ -1327,7 +1339,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 40, date: '2026-11-12' };
+  const APP = { v: 41, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -1684,6 +1696,7 @@
       last = kb;
       root.style.setProperty('--kb', kb + 'px');
       root.classList.toggle('kb-open', kb > 0);
+      if (sheet.classList.contains('open')) markHigh(heights[S.state] || 0);
       const el = document.activeElement;
       if (kb && el && el.matches && el.matches('input,textarea')) setTimeout(() => { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) { /* не важно */ } }, 50);
     };
