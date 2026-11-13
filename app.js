@@ -1119,7 +1119,7 @@
     const el = $('#toast'); el.textContent = msg;
     const place = () => {
       const lift = lv.classList.contains('open') ? 24 : (sheet.classList.contains('open') ? sheet.getBoundingClientRect().height + 16 : 24);
-      el.style.bottom = 'calc(' + lift + 'px + env(safe-area-inset-bottom,0px))';
+      el.style.bottom = 'calc(' + lift + 'px + var(--kb,0px) + env(safe-area-inset-bottom,0px))'; // --kb: клавиатура поверх страницы (планшеты)
     };
     place(); setTimeout(place, 340);
     el.classList.add('show');
@@ -1339,7 +1339,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 41, date: '2026-11-12' };
+  const APP = { v: 42, date: '2026-11-13' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
