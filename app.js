@@ -1285,7 +1285,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 35, date: '2026-11-12' };
+  const APP = { v: 36, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -1585,15 +1585,17 @@
       if (prev) scheduleSync(300);
       return false;
     }
-    renderGroup();
+    lsSet('fishmap.leftCode', '');
+    renderGroup(); syncUrlCode();
     if (!S.me) askName(renderGroup);
     return true;
   }
   function leaveGroup() {
+    lsSet('fishmap.leftCode', S.code);
     S.code = ''; lsSet('fishmap.code', ''); S.sync = { state: 'off', t: 0 }; lsSet('fishmap.syncT', 0);
     // свои точки снова отправятся при входе в группу; чужие не помечаем, иначе удалённые их авторами точки вернутся
     S.spots.forEach((x) => { if (!x.shared && (x.owner === S.dev || x.owner === undefined)) { x.dirty = true; x.srv = false; } });
-    saveLocal(); renderGroup(); toast('Вы отключились от группы. Точки остались на телефоне');
+    saveLocal(); renderGroup(); syncUrlCode(); toast('Вы отключились от группы. Точки остались на телефоне');
   }
   function renderGroup() {
     const box = $('#grp'); if (!box) return;
@@ -1622,12 +1624,50 @@
       $('#gJoin').onclick = go; $('#gCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     }
   }
+  // Код группы остаётся в адресе (#k=…): иначе «Открыть в Safari» из Telegram и иконка на экране «Домой» iPhone
+  // (у них своя память) открывали карту без кода и просили ссылку ещё раз.
+  const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let manUrl = '', manBase = null;
+  function syncUrlCode() {
+    try {
+      const parts = location.hash.slice(1).split('&').filter((x) => x && x.indexOf('k=') !== 0);
+      if (S.code) parts.unshift('k=' + S.code);
+      const h = parts.length ? '#' + parts.join('&') : '';
+      if (h !== location.hash && !(h === '' && location.hash === '#')) history.replaceState(history.state, '', location.pathname + location.search + h);
+    } catch (e) { /* адрес не критичен */ }
+    updateIosManifest();
+  }
+  // iPhone берёт стартовый адрес иконки из манифеста: подставляем адрес с кодом группы (Android делит память с Chrome, ему не нужно)
+  async function updateIosManifest() {
+    if (!IS_IOS) return;
+    const link = document.querySelector('link[rel="manifest"]'); if (!link) return;
+    try {
+      if (!manBase) manBase = await (await fetch('manifest.webmanifest')).json();
+      const dir = location.origin + location.pathname.replace(/[^/]*$/, '');
+      const m = Object.assign({}, manBase, {
+        id: location.pathname.replace(/[^/]*$/, ''), scope: dir, start_url: dir + (S.code ? '#k=' + S.code : ''),
+        icons: (manBase.icons || []).map((x) => Object.assign({}, x, { src: new URL(x.src, dir).href }))
+      });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(m)], { type: 'application/manifest+json' }));
+      link.href = url;
+      if (manUrl) URL.revokeObjectURL(manUrl);
+      manUrl = url;
+    } catch (e) { /* остаётся обычный манифест */ }
+  }
+  // «Назад» возвращает к прежней записи истории, где мог быть старый адрес: после перехода выравниваем код в адресе
+  window.addEventListener('popstate', () => setTimeout(syncUrlCode, 0));
   function checkJoin() {
     const m = /[#&]k=([A-Za-z0-9_-]{8,64})/.exec(location.hash);
-    if (!m) return;
-    const rest = location.hash.slice(1).split('&').filter((x) => x && x.indexOf('k=') !== 0).join('&');
-    history.replaceState(null, '', location.pathname + location.search + (rest ? '#' + rest : ''));
-    if (m[1] !== S.code) joinGroup(m[1]);
+    if (!m || m[1] === S.code) { syncUrlCode(); return; }
+    // от этой группы отключались, а адрес с кодом мог остаться (иконка, закладка): не входим без спроса
+    if (m[1] === lsGet('fishmap.leftCode', '')) {
+      openModal('<h3>Войти в группу снова?</h3><p class="sub">Вы отключались от этой группы на этом устройстве.</p>' +
+        '<div class="row"><button class="btn btn-secondary" id="jNo" type="button">Нет</button><button class="btn btn-primary" id="jYes" type="button">Войти</button></div>');
+      $('#jNo').onclick = () => { closeModal(); syncUrlCode(); };
+      $('#jYes').onclick = () => { closeModal(); joinGroup(m[1]).then(syncUrlCode); };
+      return;
+    }
+    joinGroup(m[1]).then(syncUrlCode);
   }
   window.addEventListener('online', () => scheduleSync(300));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleSync(300); });
@@ -2223,7 +2263,8 @@
 
   /* ---------- deep link: #p=lat,lon,name ---------- */
   async function checkHash() {
-    const m = /^#p=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(.*)$/.exec(location.hash);
+    const pv = /[#&]p=([^&]*)/.exec(location.hash);
+    const m = pv && /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(.*)$/.exec(pv[1]);
     if (!m) return;
     // точка из ссылки, скорее всего, уже есть в группе: сначала дождаться синхронизации, иначе получится дубль
     if (S.code && navigator.onLine !== false && S.sync.state !== 'ok') {
@@ -2234,7 +2275,8 @@
     const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
     let name = '';
     try { name = decodeURIComponent(m[3]).slice(0, 60); } catch (e) {}
-    history.replaceState(null, '', location.pathname + location.search);
+    { const rest = location.hash.slice(1).split('&').filter((x) => x && x.indexOf('p=') !== 0); history.replaceState(history.state, '', location.pathname + location.search + (rest.length ? '#' + rest.join('&') : '')); }
+    syncUrlCode();
     if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
     const dup = allSpots().find((s) => Math.abs(s.lat - lat) < DUP_DEG && Math.abs(s.lon - lon) < DUP_DEG);
     if (dup) { map.setView([dup.lat, dup.lon], Math.max(map.getZoom(), 13)); openSpot(dup.id, 'half'); return; }
