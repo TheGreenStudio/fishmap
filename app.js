@@ -1285,7 +1285,7 @@
 
   /* ---------- layers / settings menu ---------- */
   // Версия приложения для людей: дата и статус «последняя / есть обновление». Номер v = номер SHELL в sw.js и v в version.json
-  const APP = { v: 36, date: '2026-11-12' };
+  const APP = { v: 37, date: '2026-11-12' };
   const verDate = (d) => {
     const [y, m, dd] = String(d || '').split('-').map(Number); if (!y || !m || !dd) return '';
     const o = { day: 'numeric', month: 'long' }; if (y !== new Date().getFullYear()) o.year = 'numeric';
@@ -1566,7 +1566,7 @@
   }
   function askName(after) {
     openModal('<h3>Как вас зовут?</h3><p class="sub">Имя будет видно рядом с точками, которые вы добавили.</p>' +
-      '<input id="nName" class="input" maxlength="30" value="' + esc(S.me) + '" placeholder="Например: Володя">' +
+      '<input id="nName" class="input" maxlength="30" value="' + esc(S.me) + '">' +
       '<div class="row"><button class="btn btn-primary" id="nOk" type="button">Готово</button></div>');
     const inp = $('#nName'); inp.focus(); inp.select();
     const go = () => { const v = inp.value.trim(); if (!v) { inp.focus(); return; } S.me = v; lsSet('fishmap.me', v); closeModal(); if (after) after(); };
